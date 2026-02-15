@@ -24,10 +24,10 @@ const (
 	audienceTypeAccessTokenUser AudienceType = "access_token_user"
 )
 
-func GenerateAccessToken(userId int, privateKey *rsa.PrivateKey, issuer string, duration time.Duration) (string, error) {
+func GenerateAccessToken(userId int64, privateKey *rsa.PrivateKey, issuer string, duration time.Duration) (string, error) {
 	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.RegisteredClaims{
-		Subject:   strconv.Itoa(userId),
+		Subject:   strconv.FormatInt(userId, 10),
 		Issuer:    issuer,
 		IssuedAt:  jwt.NewNumericDate(now),
 		ExpiresAt: jwt.NewNumericDate(now.Add(duration)),

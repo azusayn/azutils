@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 )
@@ -11,4 +12,10 @@ func Sha256(text string, salt string) string {
 	_, _ = hasher.Write([]byte(salt))
 	_, _ = hasher.Write([]byte(text))
 	return fmt.Sprintf("%x", hasher.Sum(nil))
+}
+
+func GenerateRandomBytes(length int) string {
+	salt := make([]byte, length)
+	_, _ = rand.Read(salt)
+	return fmt.Sprintf("%x", salt)
 }

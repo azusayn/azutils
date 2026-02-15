@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
-	mathRand "math/rand"
 	"regexp"
 	"strconv"
 	"time"
@@ -94,14 +93,4 @@ func CheckUsername(username string) error {
 		return errors.New("invalid username")
 	}
 	return nil
-}
-
-func GenerateRandomPassword(length int) string {
-	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	seededRand := mathRand.New(mathRand.NewSource(time.Now().UnixNano()))
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
-	}
-	return string(b)
 }

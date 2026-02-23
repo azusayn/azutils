@@ -24,16 +24,19 @@ const (
 	audienceTypeAccessTokenUser AudienceType = "access_token_user"
 )
 
-func GenerateAccessToken(userId int64, privateKey *rsa.PrivateKey, issuer string, duration time.Duration) (string, error) {
+func GenerateAccessToken(userId int64, privateKey *rsa.PrivateKey, issuer string, role string, duration time.Duration) (string, error) {
 	now := time.Now()
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.RegisteredClaims{
-		Subject:   strconv.FormatInt(userId, 10),
-		Issuer:    issuer,
-		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(duration)),
-		Audience:  jwt.ClaimStrings{string(audienceTypeAccessTokenUser)},
-		// actually this is only used for key rotation.
-		ID: uuid.NewString(),
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, &CustomClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   strconv.FormatInt(userId, 10),
+			Issuer:    issuer,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(duration)),
+			Audience:  jwt.ClaimStrings{string(audienceTypeAccessTokenUser)},
+			// TODO: key rotation.
+			ID: uuid.NewString(),
+		},
+		Role: role,
 	})
 	signedToken, err := token.SignedString(privateKey)
 	if err != nil {
@@ -42,9 +45,9 @@ func GenerateAccessToken(userId int64, privateKey *rsa.PrivateKey, issuer string
 	return signedToken, nil
 }
 
-// validate access token and return user id.
-func ValidateAccessToken(token string, publicKey *rsa.PublicKey, issuer string) (int, error) {
-	claims := &jwt.RegisteredClaims{}
+// validate access token and return user id & user role.
+func ValidateAccessToken(token string, publicKey *rsa.PublicKey, expectedIssuer string) (int, string, error) {
+	claims := &CustomClaims{}
 	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
 		if alg := t.Method.Alg(); alg != jwt.SigningMethodRS256.Name {
 			return nil, errors.Errorf("sighing method not supported: %q", alg)
@@ -52,23 +55,40 @@ func ValidateAccessToken(token string, publicKey *rsa.PublicKey, issuer string) 
 		return publicKey, nil
 	})
 	if err != nil {
-		return 0, errors.Wrapf(err, "failed to parse claims")
+		return 0, "", errors.Wrapf(err, "failed to parse claims")
 	}
 
-	if len(claims.Audience) != 1 || claims.Audience[0] != string(audienceTypeAccessTokenUser) {
-		return 0, errors.New(fmt.Sprintf("audience type not supported: %q", claims.Audience[0]))
-	}
-
-	if claims.Issuer != issuer {
-		return 0, errors.New(fmt.Sprintf("wrong issuer: %q", claims.Issuer))
-	}
-
-	userId, err := strconv.Atoi(claims.Subject)
+	aud, err := claims.GetAudience()
 	if err != nil {
-		return 0, err
+		return 0, "", err
+	}
+	if len(aud) != 1 || aud[0] != string(audienceTypeAccessTokenUser) {
+		return 0, "", fmt.Errorf("invalid audience type: %v", aud)
 	}
 
-	return userId, nil
+	issuer, err := claims.GetIssuer()
+	if err != nil {
+		return 0, "", err
+	}
+	if issuer != expectedIssuer {
+		return 0, "", fmt.Errorf("wrong issuer: %q", issuer)
+	}
+
+	sub, err := claims.GetSubject()
+	if err != nil {
+		return 0, "", err
+	}
+	userId, err := strconv.Atoi(sub)
+	if err != nil {
+		return 0, "", err
+	}
+
+	role, err := claims.GetRole()
+	if err != nil {
+		return 0, "", err
+	}
+
+	return userId, role, nil
 }
 
 func GeneratePrivateKey() (*rsa.PrivateKey, error) {

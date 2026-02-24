@@ -24,11 +24,11 @@ const (
 	audienceTypeAccessTokenUser AudienceType = "access_token_user"
 )
 
-func GenerateAccessToken(userId int64, privateKey *rsa.PrivateKey, issuer string, role string, duration time.Duration) (string, error) {
+func GenerateAccessToken(userId int32, privateKey *rsa.PrivateKey, issuer string, role string, duration time.Duration) (string, error) {
 	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, &CustomClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   strconv.FormatInt(userId, 10),
+			Subject:   strconv.FormatInt(int64(userId), 10),
 			Issuer:    issuer,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(duration)),
@@ -46,7 +46,7 @@ func GenerateAccessToken(userId int64, privateKey *rsa.PrivateKey, issuer string
 }
 
 // validate access token and return user id & user role.
-func ValidateAccessToken(token string, publicKey *rsa.PublicKey, expectedIssuer string) (int, string, error) {
+func ValidateAccessToken(token string, publicKey *rsa.PublicKey, expectedIssuer string) (int32, string, error) {
 	claims := &CustomClaims{}
 	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
 		if alg := t.Method.Alg(); alg != jwt.SigningMethodRS256.Name {
@@ -88,7 +88,7 @@ func ValidateAccessToken(token string, publicKey *rsa.PublicKey, expectedIssuer 
 		return 0, "", err
 	}
 
-	return userId, role, nil
+	return int32(userId), role, nil
 }
 
 func GeneratePrivateKey() (*rsa.PrivateKey, error) {

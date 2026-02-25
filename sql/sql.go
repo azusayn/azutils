@@ -57,3 +57,33 @@ func BuildBatchUpdateSQL(tableName string, ids []any, colNames []string, colValu
 	)
 	return stmt, values
 }
+
+func BuildBatchInsertSQL(tableName string, colNames []string, colValues [][]any) (string, []any) {
+	lenCols := len(colNames)
+	lenRows := len(colValues[0])
+
+	args := make([]string, 0, lenRows)
+	values := make([]any, 0, lenRows*lenCols)
+
+	for i := 0; i < lenRows; i++ {
+		base := i * lenCols
+		placeholders := make([]string, lenCols)
+		for j := 0; j < lenCols; j++ {
+			placeholders[j] = fmt.Sprintf("$%d", base+j+1)
+		}
+		args = append(args, fmt.Sprintf("(%s)", strings.Join(placeholders, ",")))
+		for j := 0; j < lenCols; j++ {
+			values = append(values, colValues[j][i])
+		}
+	}
+
+	stmt := fmt.Sprintf(`
+		INSERT INTO %s(%s)
+		VALUES %s
+	`,
+		tableName,
+		strings.Join(colNames, ","),
+		strings.Join(args, ","),
+	)
+	return stmt, values
+}

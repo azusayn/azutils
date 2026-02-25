@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
-	"regexp"
 	"strconv"
 	"time"
 
@@ -97,20 +96,4 @@ func GeneratePrivateKey() (*rsa.PrivateKey, error) {
 		return nil, err
 	}
 	return privateKey, nil
-}
-
-func CheckUsername(username string) error {
-	if len(username) == 0 {
-		return errors.New("username empty")
-	}
-	if len(username) < 6 {
-		return errors.New("username too short")
-	}
-	if len(username) > 15 {
-		return errors.New("username too long")
-	}
-	if matched, _ := regexp.MatchString(`^[a-zA-Z0-9_@]+$`, username); !matched {
-		return errors.New("invalid username")
-	}
-	return nil
 }

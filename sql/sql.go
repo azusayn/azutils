@@ -58,23 +58,22 @@ func BuildBatchUpdateSQL(tableName string, ids []any, colNames []string, colValu
 	return stmt, values
 }
 
-func BuildBatchInsertSQL(tableName string, colNames []string, colValues [][]any) (string, []any) {
+// row first.
+func BuildBatchInsertSQL(tableName string, colNames []string, rowValues [][]any) (string, []any) {
 	lenCols := len(colNames)
-	lenRows := len(colValues[0])
+	lenRows := len(rowValues)
 
 	args := make([]string, 0, lenRows)
 	values := make([]any, 0, lenRows*lenCols)
 
-	for i := 0; i < lenRows; i++ {
+	for i, row := range rowValues {
 		base := i * lenCols
 		placeholders := make([]string, lenCols)
 		for j := 0; j < lenCols; j++ {
 			placeholders[j] = fmt.Sprintf("$%d", base+j+1)
 		}
 		args = append(args, fmt.Sprintf("(%s)", strings.Join(placeholders, ",")))
-		for j := 0; j < lenCols; j++ {
-			values = append(values, colValues[j][i])
-		}
+		values = append(values, row...)
 	}
 
 	stmt := fmt.Sprintf(`

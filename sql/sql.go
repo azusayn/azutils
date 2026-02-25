@@ -5,6 +5,7 @@ import (
 	"strings"
 )
 
+// return built statment & values.
 // NOTES:
 //  1. name of the id column must be only 'id'
 //  2. format of the colValues:

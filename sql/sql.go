@@ -1,8 +1,11 @@
+// only used for Postgres.
 package sql
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // return built statment & values.
@@ -39,8 +42,16 @@ func BuildBatchUpdateSQL(tableName string, ids []any, colNames []string, colValu
 
 	// SET product_name=v.product_name, ...
 	sets := make([]string, lenColVals)
+	colNames = append([]string{"id"}, colNames...)
 	for i, c := range colNames {
-		sets[i] = fmt.Sprintf("%s=v.%s", c, c)
+		if i > 0 {
+			sets[i-1] = fmt.Sprintf("%s=v.%s", c, c)
+		}
+		// skip processing this column type if there
+		// are no values in the array.
+		if len(colValues[i]) != 0 {
+			colNames[i] += toPostgresTypePostfix(colValues[i][0])
+		}
 	}
 
 	stmt := fmt.Sprintf(`
@@ -56,6 +67,15 @@ func BuildBatchUpdateSQL(tableName string, ids []any, colNames []string, colValu
 		tableName,
 	)
 	return stmt, values
+}
+
+func toPostgresTypePostfix(v any) string {
+	switch v.(type) {
+	case uuid.UUID:
+		return "::uuid"
+	default:
+		return ""
+	}
 }
 
 // row first.

@@ -73,7 +73,7 @@ func BuildBatchUpdateSQL(tableName string, ids []any, colNames []string, colValu
 func toPostgresTypePostfix(v any) string {
 	switch v.(type) {
 	case uuid.UUID:
-		return "::uuid"
+		return " uuid"
 	default:
 		return ""
 	}

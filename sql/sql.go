@@ -2,11 +2,8 @@
 package sql
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 // return built statment & values.
@@ -18,7 +15,9 @@ import (
 //     colValues[1]: c1v1 c1v2 c1v3 ...
 //     colValues[2]: c2v1 c2v2 c2v3 ...
 //  3. len(colNames) == len(colValues), len(colNames) >= 1
-func BuildBatchUpdateSQL(tableName string, colNames []string, colValues [][]any) (string, []any) {
+//  4. some values may be incorrectly inferred as text by Postgres
+//     use colTypes to specify the type for each column if needed.
+func BuildBatchUpdateSQL(tableName string, colNames []string, colTypes, colValues [][]any) (string, []any) {
 	numTgtCols := len(colNames)
 	numTgtRows := len(colValues[0])
 	searchKey := colNames[0]
@@ -30,8 +29,7 @@ func BuildBatchUpdateSQL(tableName string, colNames []string, colValues [][]any)
 		placeholders := make([]string, numTgtCols)
 		for j := 0; j < numTgtCols; j++ {
 			value := colValues[j][i]
-			typePostfix := toPostgresTypePostfix(value)
-			placeholders[j] = fmt.Sprintf("$%d%s", base+j+1, typePostfix)
+			placeholders[j] = fmt.Sprintf("$%d%s", base+j+1, colTypes[j])
 			values = append(values, value)
 		}
 		args = append(args, "("+strings.Join(placeholders, ",")+")")
@@ -57,17 +55,6 @@ func BuildBatchUpdateSQL(tableName string, colNames []string, colValues [][]any)
 		searchKey,
 	)
 	return stmt, values
-}
-
-func toPostgresTypePostfix(v any) string {
-	switch v.(type) {
-	case uuid.UUID:
-		return "::UUID"
-	case json.RawMessage:
-		return "::JSONB"
-	default:
-		return ""
-	}
 }
 
 // row first.

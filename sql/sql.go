@@ -17,7 +17,7 @@ import (
 //  3. len(colNames) == len(colValues), len(colNames) >= 1
 //  4. some values may be incorrectly inferred as text by Postgres
 //     use colTypes to specify the type for each column if needed.
-func BuildBatchUpdateSQL(tableName string, colNames []string, colTypes, colValues [][]any) (string, []any) {
+func BuildBatchUpdateSQL(tableName string, colNames []string, colTypes []string, colValues [][]any) (string, []any) {
 	numTgtCols := len(colNames)
 	numTgtRows := len(colValues[0])
 	searchKey := colNames[0]

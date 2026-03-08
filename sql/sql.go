@@ -43,6 +43,7 @@ func BuildBatchUpdateSQL(tableName string, ids []any, colNames []string, colValu
 	// SET product_name=v.product_name, ...
 	sets := make([]string, lenColVals)
 	colNames = append([]string{"id"}, colNames...)
+	colValues = append([][]any{ids}, colValues...)
 	for i, c := range colNames {
 		if i > 0 {
 			sets[i-1] = fmt.Sprintf("%s=v.%s", c, c)

@@ -64,7 +64,7 @@ func BuildBatchUpdateSQL(tableName string, ids []any, colNames []string, colValu
 		tableName,
 		strings.Join(sets, ","),
 		strings.Join(args, ","),
-		"id,"+strings.Join(colNames, ","),
+		strings.Join(colNames, ","),
 		tableName,
 	)
 	return stmt, values

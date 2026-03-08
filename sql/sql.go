@@ -2,6 +2,7 @@
 package sql
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -61,7 +62,9 @@ func BuildBatchUpdateSQL(tableName string, colNames []string, colValues [][]any)
 func toPostgresTypePostfix(v any) string {
 	switch v.(type) {
 	case uuid.UUID:
-		return "::uuid"
+		return "::UUID"
+	case json.RawMessage:
+		return "::JSONB"
 	default:
 		return ""
 	}

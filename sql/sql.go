@@ -29,7 +29,7 @@ func BuildBatchUpdateSQL(tableName string, colNames []string, colTypes []string,
 		placeholders := make([]string, numTgtCols)
 		for j := 0; j < numTgtCols; j++ {
 			value := colValues[j][i]
-			placeholders[j] = fmt.Sprintf("$%d%s", base+j, colTypes[j])
+			placeholders[j] = fmt.Sprintf("$%d%s", base+j+1, colTypes[j])
 			values = append(values, value)
 		}
 		args = append(args, "("+strings.Join(placeholders, ",")+")")

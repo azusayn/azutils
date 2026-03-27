@@ -59,9 +59,9 @@ func (l *PrettyLogger) log(level Level, msg string, args ...any) {
 	case LevelDebug:
 		levelStr = color.HiCyanString("[DEBUG]")
 	case LevelInfo:
-		levelStr = color.HiGreenString("[INFO] ")
+		levelStr = color.HiGreenString("[INFO]")
 	case LevelWarn:
-		levelStr = color.HiYellowString("[WARN] ")
+		levelStr = color.HiYellowString("[WARN]")
 	case LevelError:
 		levelStr = color.HiRedString("[ERROR]")
 	default:

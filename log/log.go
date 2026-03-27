@@ -11,13 +11,13 @@ import (
 )
 
 var (
-	logger *PrettyLogger
+	logger *prettyLogger
 	once   sync.Once
 )
 
 func init() {
 	once.Do(func() {
-		logger = NewPrettyLogger(os.Stdout, LevelDebug)
+		logger = newPrettyLogger(os.Stdout, LevelDebug)
 	})
 }
 
@@ -30,25 +30,21 @@ const (
 	LevelError
 )
 
-type PrettyLogger struct {
+type prettyLogger struct {
 	out   io.Writer
 	level Level
 	mu    sync.Mutex
 }
 
-func NewPrettyLogger(out io.Writer, level Level) *PrettyLogger {
-	return &PrettyLogger{
+func newPrettyLogger(out io.Writer, level Level) *prettyLogger {
+	return &prettyLogger{
 		out:   out,
 		level: level,
 	}
 }
 
-func (l *PrettyLogger) Enabled(level Level) bool {
-	return level >= l.level
-}
-
-func (l *PrettyLogger) log(level Level, msg string, args ...any) {
-	if !l.Enabled(level) {
+func (l *prettyLogger) log(level Level, msg string, args ...any) {
+	if l.level > level {
 		return
 	}
 	l.mu.Lock()
@@ -74,6 +70,10 @@ func (l *PrettyLogger) log(level Level, msg string, args ...any) {
 	time := time.Now().Format("2006-01-02 15:04:05 -07:00")
 	line := fmt.Sprintf("[%s] %s %s\n", time, levelStr, msg)
 	_, _ = l.out.Write([]byte(line))
+}
+
+func SetLevel(level Level) {
+	logger.level = level
 }
 
 func Debug(msg string, args ...any) {

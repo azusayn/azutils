@@ -6,16 +6,27 @@ import (
 	"fmt"
 )
 
-// hash salt and password with SHA-256.
-func Sha256(text string, salt string) string {
+// Sha256 computes the SHA-256 digest of the given inputs in order and
+// returns it as a hex string.
+func Sha256(inputs ...string) string {
 	hasher := sha256.New()
-	_, _ = hasher.Write([]byte(salt))
-	_, _ = hasher.Write([]byte(text))
+	for _, input := range inputs {
+		_, _ = hasher.Write([]byte(input))
+	}
 	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
 
-func GenerateRandomBytes(length int) string {
+// GenerateRandomHexString returns a hex string of random bytes with the
+// specified length.
+func GenerateRandomHexString(length int) string {
 	salt := make([]byte, length)
 	_, _ = rand.Read(salt)
 	return fmt.Sprintf("%x", salt)
+}
+
+// GenerateRandomBytes returns a slice of random bytes with the specified length.
+func GenerateRandomBytes(length int) []byte {
+	bytes := make([]byte, length)
+	_, _ = rand.Read(bytes)
+	return bytes
 }

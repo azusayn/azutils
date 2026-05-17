@@ -10,18 +10,23 @@ import (
 func TestGenai(t *testing.T) {
 	ctx := context.Background()
 
-	extractor, err := NewConInfoExtractor(ctx, "gemma-4-26b-a4b-it", os.Getenv("API_KEY"))
+	apiKey := os.Getenv("TEST_GENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("TEST_GENAI_API_KEY not set")
+	}
+
+	extractor, err := NewConInfoExtractor(ctx, "gemma-4-26b-a4b-it", apiKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	imagePath := "event.jpg"
+	imagePath := os.Getenv("TEST_GENAI_IMAGE_PATH")
 	imageBytes, err := os.ReadFile(imagePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	promptPath := "prompt.txt"
+	promptPath := os.Getenv("TEST_GENAI_PROMPT_PATH")
 	promptBytes, err := os.ReadFile(promptPath)
 	if err != nil {
 		t.Fatal(err)
@@ -33,5 +38,6 @@ func TestGenai(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Log(resp.EventText)
 }

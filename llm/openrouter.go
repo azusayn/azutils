@@ -65,7 +65,7 @@ type OpenRouterCredits struct {
 }
 
 func (client *OpenRouterClient) GetCredits(ctx context.Context) (*OpenRouterCredits, error) {
-	req, err := http.NewRequest("GET", "https://openrouter.ai/api/v1/auth/key", nil)
+	req, err := http.NewRequest(http.MethodGet, "https://openrouter.ai/api/v1/auth/key", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

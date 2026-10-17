@@ -24,6 +24,7 @@ type Message struct {
 type ResponseSchema struct {
 	// Strict 为 true 时要求输出字段与 schema 完全匹配，否则仅保证输出为合法 JSON。
 	Strict bool
+	Schema json.RawMessage
 }
 
 type CreateChatRequest struct {

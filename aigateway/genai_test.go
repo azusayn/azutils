@@ -2,7 +2,10 @@ package aigateway
 
 import (
 	"context"
+	"encoding/base64"
+	"mime"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -15,7 +18,7 @@ func TestGenai(t *testing.T) {
 		t.Skip("TEST_GENAI_API_KEY not set")
 	}
 
-	extractor, err := NewConInfoExtractor(ctx, "gemma-4-26b-a4b-it", apiKey)
+	client, err := NewGenaiClient(ctx, NewOpenAICompatibleProvider(BaseProvider{APIKey: apiKey}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,19 +28,34 @@ func TestGenai(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mimeType := mime.TypeByExtension(filepath.Ext(imagePath))
+	if mimeType == "" {
+		t.Fatal("image has no MIME type")
+	}
+	imageURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(imageBytes)
 
 	promptPath := os.Getenv("TEST_GENAI_PROMPT_PATH")
 	promptBytes, err := os.ReadFile(promptPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	prompt := string(promptBytes)
 
 	ctx, cancel := context.WithTimeout(ctx, time.Second*20)
 	defer cancel()
-	resp, err := extractor.Extract(ctx, string(promptBytes), imageBytes, imagePath)
+	resp, err := client.Chat.Create(ctx, CreateChatRequest{
+		Model: "gemma-4-26b-a4b-it",
+		Messages: []Message{
+			{Role: "system", Parts: []*MessagePart{{Text: &prompt}}},
+			{Role: "user", Parts: []*MessagePart{{ImageURL: &imageURL}}},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == nil {
+		t.Fatal("empty response")
+	}
 
-	t.Log(resp.EventText)
+	t.Log(*resp.Choices[0].Message.Content)
 }

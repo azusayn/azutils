@@ -2,120 +2,320 @@ package aigateway
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime"
-	"path/filepath"
-	"time"
+	"net/url"
+	"path"
+	"strings"
 
 	"google.golang.org/genai"
 )
 
-const GenaiRespSchema string = `
-{
-	"type": "object",
-	"properties": {
-		"response": {
-			"type": "string"
+type GenaiClient struct {
+	Chat      ChatService
+	Embedding EmbeddingService
+
+	sdk *genai.Client
+}
+
+func NewGenaiClient(ctx context.Context, provider Provider) (*GenaiClient, error) {
+	config := &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  provider.GetAPIKey(),
+	}
+	if baseURL := provider.GetBaseURL(); baseURL != "" {
+		config.HTTPOptions = genai.HTTPOptions{BaseURL: baseURL}
+	}
+	sdk, err := genai.NewClient(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &GenaiClient{sdk: sdk}
+	client.Chat = &genaiChat{client: client}
+	client.Embedding = &genaiEmbedding{}
+	return client, nil
+}
+
+type genaiChat struct {
+	client *GenaiClient
+}
+
+func (c *genaiChat) Create(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (*ChatResponse, error) {
+	config := &genai.GenerateContentConfig{}
+	contents := make([]*genai.Content, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		switch message.Role {
+		case "system":
+			parts, err := buildGenaiSystemParts(message.Parts)
+			if err != nil {
+				return nil, err
+			}
+			if config.SystemInstruction == nil {
+				config.SystemInstruction = &genai.Content{}
+			}
+			config.SystemInstruction.Parts = append(config.SystemInstruction.Parts, parts...)
+		case "user":
+			content, err := buildGenaiUserContent(message.Parts)
+			if err != nil {
+				return nil, err
+			}
+			contents = append(contents, content)
+		case "assistant":
+			content, err := buildGenaiAssistantContent(message.Parts)
+			if err != nil {
+				return nil, err
+			}
+			contents = append(contents, content)
+		default:
+			return nil, fmt.Errorf("chat message role %s is not supported", message.Role)
 		}
 	}
-}
-`
 
-type ConInfoExtractor struct {
-	// available model names in Google AI Studio.
-	// e.g. "gemma-4-26b-a4b-it".
-	Model  string
-	Client *genai.Client
-	Schema genai.Schema
-}
+	for _, opt := range opts {
+		switch opt.Type {
+		case CreateChatOptionTypeTemperature:
+			value, ok := opt.Value.(float64)
+			if !ok {
+				return nil, fmt.Errorf("chat option temperature requires a float64")
+			}
+			temperature := float32(value)
+			config.Temperature = &temperature
 
-func NewConInfoExtractor(ctx context.Context, model string, apiKey string) (*ConInfoExtractor, error) {
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		Backend: genai.BackendGeminiAPI,
-		APIKey:  apiKey,
-	})
+		case CreateChatOptionTypeMaxTokens:
+			value, ok := opt.Value.(int)
+			if !ok {
+				return nil, fmt.Errorf("chat option max_tokens requires an int")
+			}
+			config.MaxOutputTokens = int32(value)
+
+		case CreateChatOptionTypeSchema:
+			schema, ok := opt.Value.(*ResponseSchema)
+			if !ok || schema == nil {
+				return nil, fmt.Errorf("chat option schema requires a response schema")
+			}
+			config.ResponseMIMEType = "application/json"
+			if len(schema.Schema) == 0 {
+				break
+			}
+			var responseSchema any
+			if err := json.Unmarshal(schema.Schema, &responseSchema); err != nil {
+				return nil, fmt.Errorf("chat option schema is invalid: %w", err)
+			}
+			config.ResponseJsonSchema = responseSchema
+
+		case CreateChatOptionTypeTools:
+			tools, ok := opt.Value.([]Tool)
+			if !ok {
+				return nil, fmt.Errorf("chat option tools requires a tool list")
+			}
+			declarations := make([]*genai.FunctionDeclaration, 0, len(tools))
+			for _, tool := range tools {
+				declaration := &genai.FunctionDeclaration{
+					Name:        tool.Name,
+					Description: tool.Description,
+				}
+				if len(tool.Parameters) > 0 {
+					var parameters any
+					if err := json.Unmarshal(tool.Parameters, &parameters); err != nil {
+						return nil, fmt.Errorf("chat tool parameters are invalid: %w", err)
+					}
+					declaration.ParametersJsonSchema = parameters
+				}
+				declarations = append(declarations, declaration)
+			}
+			config.Tools = []*genai.Tool{{
+				FunctionDeclarations: declarations,
+			}}
+
+		default:
+			return nil, fmt.Errorf("chat option %s is not supported", opt.Type)
+		}
+	}
+
+	resp, err := c.client.sdk.Models.GenerateContent(ctx, req.Model, contents, config)
 	if err != nil {
 		return nil, err
 	}
-	extractor := &ConInfoExtractor{
-		Model:  model,
-		Client: client,
-	}
-	if err := json.Unmarshal([]byte(GenaiRespSchema), &extractor.Schema); err != nil {
-		return nil, err
-	}
-	return extractor, nil
-}
-
-type ExtractResponse struct {
-	TokenUsage   int32
-	ModelVersion string
-	CreateTime   time.Time
-	ResponseID   string
-	EventText    string
-	Latency      time.Duration
-}
-
-func (e *ConInfoExtractor) Extract(ctx context.Context, prompt string, imageBytes []byte, imageFileName string) (*ExtractResponse, error) {
-	start := time.Now()
-	config := &genai.GenerateContentConfig{
-		SystemInstruction: &genai.Content{
-			Parts: []*genai.Part{
-				{Text: prompt},
-			},
-		},
-		ResponseMIMEType: "application/json",
-		ResponseSchema:   &e.Schema,
-	}
-
-	content := &genai.Content{
-		Role: "user",
-		Parts: []*genai.Part{
-			{
-				InlineData: &genai.Blob{
-					Data:     imageBytes,
-					MIMEType: mime.TypeByExtension(filepath.Ext(imageFileName)),
-				},
-			},
-		},
-	}
-
-	resp, err := e.Client.Models.GenerateContent(ctx, e.Model, []*genai.Content{content}, config)
-	if err != nil {
-		return nil, err
-	}
-
 	if resp == nil {
 		return nil, errors.New("empty response")
 	}
+	return buildGenaiChatResponse(resp)
+}
 
-	var tokenUsage int32
-	if resp.UsageMetadata != nil {
-		tokenUsage = resp.UsageMetadata.TotalTokenCount
+func (c *genaiChat) CreateStream(context.Context, CreateChatRequest, ...CreateChatOption) (<-chan *ChatResponse, error) {
+	return nil, errors.New("genai chat stream is not implemented")
+}
+
+func (c *genaiChat) Ping(context.Context) error {
+	return errors.New("genai chat ping is not implemented")
+}
+
+func buildGenaiSystemParts(parts []*MessagePart) ([]*genai.Part, error) {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("chat message requires a part")
 	}
+	converted := make([]*genai.Part, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || part.Text == nil {
+			return nil, fmt.Errorf("chat message part requires text")
+		}
+		if part.ImageURL != nil {
+			return nil, fmt.Errorf("chat message role system does not support images")
+		}
+		converted = append(converted, genai.NewPartFromText(*part.Text))
+	}
+	return converted, nil
+}
 
-	var eventText string
-	if cands := resp.Candidates; len(cands) != 0 && cands[0].Content != nil {
-		if parts := cands[0].Content.Parts; len(parts) != 0 {
-			genaiResp := struct {
-				Response string `json:"response"`
-			}{}
-			if err := json.Unmarshal([]byte(parts[0].Text), &genaiResp); err != nil {
+func buildGenaiUserContent(parts []*MessagePart) (*genai.Content, error) {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]*genai.Part, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || (part.Text == nil && part.ImageURL == nil) {
+			return nil, fmt.Errorf("chat message part requires text or an image URL")
+		}
+		if part.Text != nil {
+			converted = append(converted, genai.NewPartFromText(*part.Text))
+		}
+		if part.ImageURL != nil {
+			image, err := buildGenaiImagePart(*part.ImageURL)
+			if err != nil {
 				return nil, err
 			}
-			eventText = genaiResp.Response
+			converted = append(converted, image)
 		}
 	}
-
-	elasped := time.Since(start)
-
-	return &ExtractResponse{
-		TokenUsage:   tokenUsage,
-		CreateTime:   resp.CreateTime,
-		ModelVersion: resp.ModelVersion,
-		ResponseID:   resp.ResponseID,
-		EventText:    eventText,
-		Latency:      elasped,
+	return &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: converted,
 	}, nil
+}
+
+func buildGenaiAssistantContent(parts []*MessagePart) (*genai.Content, error) {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]*genai.Part, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || part.Text == nil {
+			return nil, fmt.Errorf("chat message part requires text")
+		}
+		if part.ImageURL != nil {
+			return nil, fmt.Errorf("chat message role assistant does not support images")
+		}
+		converted = append(converted, genai.NewPartFromText(*part.Text))
+	}
+	return &genai.Content{
+		Role:  genai.RoleModel,
+		Parts: converted,
+	}, nil
+}
+
+func buildGenaiImagePart(imageURL string) (*genai.Part, error) {
+	if strings.HasPrefix(imageURL, "data:") {
+		mimeType, data, err := decodeGenaiDataImage(imageURL)
+		if err != nil {
+			return nil, err
+		}
+		return &genai.Part{
+			InlineData: &genai.Blob{
+				Data:     data,
+				MIMEType: mimeType,
+			},
+		}, nil
+	}
+
+	parsed, err := url.Parse(imageURL)
+	if err != nil {
+		return nil, fmt.Errorf("chat message image URL is invalid: %w", err)
+	}
+	mimeType := mime.TypeByExtension(path.Ext(parsed.Path))
+	if mimeType == "" {
+		return nil, fmt.Errorf("chat message image URL has no MIME type")
+	}
+	return genai.NewPartFromURI(imageURL, mimeType), nil
+}
+
+func decodeGenaiDataImage(imageURL string) (string, []byte, error) {
+	rest, ok := strings.CutPrefix(imageURL, "data:")
+	if !ok {
+		return "", nil, fmt.Errorf("chat message image URL is invalid")
+	}
+	header, payload, ok := strings.Cut(rest, ",")
+	if !ok {
+		return "", nil, fmt.Errorf("chat message image URL is invalid")
+	}
+	mimeType, _, _ := strings.Cut(header, ";")
+	if mimeType == "" {
+		return "", nil, fmt.Errorf("chat message image URL has no MIME type")
+	}
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", nil, fmt.Errorf("chat message image URL is invalid: %w", err)
+	}
+	return mimeType, data, nil
+}
+
+func buildGenaiChatResponse(resp *genai.GenerateContentResponse) (*ChatResponse, error) {
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	choices := make([]Choice, 0, len(resp.Candidates))
+	for _, candidate := range resp.Candidates {
+		if candidate == nil {
+			continue
+		}
+		var text string
+		var role string
+		if candidate.Content != nil {
+			role = candidate.Content.Role
+			for _, part := range candidate.Content.Parts {
+				if part == nil {
+					continue
+				}
+				text += part.Text
+			}
+		}
+		choices = append(choices, Choice{
+			Message: ChoiceMessage{
+				Content: &text,
+				Role:    role,
+			},
+		})
+	}
+
+	return &ChatResponse{
+		Choices: choices,
+		Model:   resp.ModelVersion,
+		Usage:   buildGenaiUsage(resp.UsageMetadata),
+		Raw:     raw,
+	}, nil
+}
+
+func buildGenaiUsage(usage *genai.GenerateContentResponseUsageMetadata) *Usage {
+	if usage == nil {
+		return nil
+	}
+	return &Usage{
+		InputTokens:  int(usage.PromptTokenCount),
+		OutputTokens: int(usage.CandidatesTokenCount),
+	}
+}
+
+type genaiEmbedding struct{}
+
+func (e *genaiEmbedding) Create(context.Context, CreateEmbeddingRequest) (*EmbeddingResponse, error) {
+	return nil, errors.New("genai embedding is not implemented")
+}
+
+func (e *genaiEmbedding) Ping(context.Context) error {
+	return errors.New("genai embedding is not implemented")
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 
 	or "github.com/revrost/go-openrouter"
 )
@@ -15,13 +14,11 @@ type OpenRouterClient struct {
 	Embedding EmbeddingService
 
 	sdk *or.Client
-	BaseProvider
 }
 
-func NewOpenRouterClient(base BaseProvider) *OpenRouterClient {
+func NewOpenRouterClient(provider BaseProvider) *OpenRouterClient {
 	client := &OpenRouterClient{
-		sdk:          or.NewClient(base.APIKey),
-		BaseProvider: base,
+		sdk: or.NewClient(provider.APIKey),
 	}
 
 	client.Chat = &openRouterChat{client: client}
@@ -252,45 +249,4 @@ func (e *openRouterEmbedding) Create(context.Context, CreateEmbeddingRequest) (*
 
 func (e *openRouterEmbedding) Ping(context.Context) error {
 	return errors.New("openrouter embedding is not implemented")
-}
-
-type OpenRouterCredits struct {
-	Data struct {
-		Label      string  `json:"label"`
-		Usage      float64 `json:"usage"`
-		Limit      float64 `json:"limit"`
-		IsFreeTier bool    `json:"is_free_tier"`
-		RateLimit  struct {
-			Requests int    `json:"requests"`
-			Interval string `json:"interval"`
-		} `json:"rate_limit"`
-	} `json:"data"`
-}
-
-func (client *OpenRouterClient) GetCredits(ctx context.Context) (*OpenRouterCredits, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://openrouter.ai/api/v1/auth/key", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+client.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	httpClient := &http.Client{}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("api responded with status %d", resp.StatusCode)
-	}
-
-	var credits OpenRouterCredits
-	if err := json.NewDecoder(resp.Body).Decode(&credits); err != nil {
-		return nil, fmt.Errorf("failed to parse json response: %w", err)
-	}
-
-	return &credits, nil
 }

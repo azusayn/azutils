@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -370,6 +371,10 @@ func (c *openaiCompatileEmbedding) Create(ctx context.Context, req CreateEmbeddi
 			})
 		}
 	}
+
+	slices.SortFunc(results, func(a, b Embedding) int {
+		return a.Index - b.Index
+	})
 
 	return &EmbeddingResponse{
 		Embeddings: results,

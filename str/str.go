@@ -1,7 +1,7 @@
-// Package utils provides string utility functions.
+// Package str provides string utility functions.
 //
 // Author: Claude
-package utils
+package str
 
 import (
 	"strings"

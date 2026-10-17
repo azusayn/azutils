@@ -3,6 +3,7 @@ package aigateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -10,45 +11,247 @@ import (
 )
 
 type OpenRouterClient struct {
-	*or.Client
-	apiKey string
+	Chat      ChatService
+	Embedding EmbeddingService
+
+	sdk *or.Client
+	BaseProvider
 }
 
-func NewOpenRouterClient(apiKey string) *OpenRouterClient {
-	return &OpenRouterClient{
-		Client: or.NewClient(apiKey),
-		apiKey: apiKey,
+func NewOpenRouterClient(base BaseProvider) *OpenRouterClient {
+	client := &OpenRouterClient{
+		sdk:          or.NewClient(base.APIKey),
+		BaseProvider: base,
 	}
+
+	client.Chat = &openRouterChat{client: client}
+	client.Embedding = &openRouterEmbedding{}
+
+	return client
 }
 
-type OpenRouterResponse struct {
-	Text            string
-	PromptTokens    int
-	CompletionToken int
-	Cost            float64
+type openRouterChat struct {
+	client *OpenRouterClient
 }
 
-func (client *OpenRouterClient) SendMessage(ctx context.Context, text string, model string) (*OpenRouterResponse, error) {
-	resp, err := client.CreateChatCompletion(
-		ctx,
-		or.ChatCompletionRequest{
-			// e.g. deepseek/deepseek-v3.2, openai/gpt-5-chat ...
-			Model: model,
-			Messages: []or.ChatCompletionMessage{
-				or.UserMessage(text),
-			},
-		},
-	)
+func (c *openRouterChat) Create(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (*ChatResponse, error) {
+	params, err := buildOpenRouterChatRequest(req, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	return &OpenRouterResponse{
-		Text:            resp.Choices[0].Message.Content.Text,
-		PromptTokens:    resp.Usage.PromptTokens,
-		CompletionToken: resp.Usage.CompletionTokens,
-		Cost:            resp.Usage.Cost,
+	resp, err := c.client.sdk.CreateChatCompletion(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	return buildOpenRouterChatResponse(resp)
+}
+
+func (c *openRouterChat) CreateStream(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (<-chan *ChatResponse, error) {
+	params, err := buildOpenRouterChatRequest(req, opts)
+	if err != nil {
+		return nil, err
+	}
+	params.StreamOptions = &or.StreamOptions{IncludeUsage: true}
+
+	stream, err := c.client.sdk.CreateChatCompletionStream(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+
+	respCh := make(chan *ChatResponse)
+	go func() {
+		defer func() {
+			stream.Close()
+			close(respCh)
+		}()
+
+		for {
+			chunk, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			resp, err := buildOpenRouterStreamResponse(chunk)
+			if err != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case respCh <- resp:
+			}
+		}
+	}()
+
+	return respCh, nil
+}
+
+func (c *openRouterChat) Ping(ctx context.Context) error {
+	_, err := c.client.sdk.CreateChatCompletion(ctx, or.ChatCompletionRequest{
+		Messages: []or.ChatCompletionMessage{
+			or.UserMessage(dummyPayload),
+		},
+	})
+	return err
+}
+
+func buildOpenRouterChatRequest(req CreateChatRequest, opts []CreateChatOption) (or.ChatCompletionRequest, error) {
+	messages := make([]or.ChatCompletionMessage, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		param, err := buildOpenRouterMessage(message)
+		if err != nil {
+			return or.ChatCompletionRequest{}, err
+		}
+		messages = append(messages, param)
+	}
+
+	params := or.ChatCompletionRequest{
+		Model:    req.Model,
+		Messages: messages,
+	}
+	for _, opt := range opts {
+		switch opt.Type {
+		case CreateChatOptionTypeTemperature:
+			value, ok := opt.Value.(float64)
+			if !ok {
+				return or.ChatCompletionRequest{}, fmt.Errorf("chat option temperature requires a float64")
+			}
+			params.Temperature = float32(value)
+
+		case CreateChatOptionTypeMaxTokens:
+			value, ok := opt.Value.(int)
+			if !ok {
+				return or.ChatCompletionRequest{}, fmt.Errorf("chat option max_tokens requires an int")
+			}
+			params.MaxTokens = value
+
+		case CreateChatOptionTypeSchema:
+			schema, ok := opt.Value.(*ResponseSchema)
+			if !ok || schema == nil {
+				return or.ChatCompletionRequest{}, fmt.Errorf("chat option schema requires a response schema")
+			}
+			if schema.Strict {
+				params.ResponseFormat = &or.ChatCompletionResponseFormat{
+					Type: or.ChatCompletionResponseFormatTypeJSONSchema,
+					JSONSchema: &or.ChatCompletionResponseFormatJSONSchema{
+						Strict: true,
+					},
+				}
+				break
+			}
+			params.ResponseFormat = &or.ChatCompletionResponseFormat{
+				Type: or.ChatCompletionResponseFormatTypeJSONObject,
+			}
+
+		case CreateChatOptionTypeTools:
+			tools, ok := opt.Value.([]Tool)
+			if !ok {
+				return or.ChatCompletionRequest{}, fmt.Errorf("chat option tools requires a tool list")
+			}
+			converted := make([]or.Tool, 0, len(tools))
+			for _, tool := range tools {
+				function := &or.FunctionDefinition{Name: tool.Name}
+				if tool.Description != "" {
+					function.Description = tool.Description
+				}
+				if len(tool.Parameters) > 0 {
+					function.Parameters = tool.Parameters
+				}
+				converted = append(converted, or.Tool{
+					Type:     or.ToolTypeFunction,
+					Function: function,
+				})
+			}
+			params.Tools = converted
+
+		default:
+			return or.ChatCompletionRequest{}, fmt.Errorf("chat option %s is not supported", opt.Type)
+		}
+	}
+	return params, nil
+}
+
+func buildOpenRouterMessage(message Message) (or.ChatCompletionMessage, error) {
+	switch message.Role {
+	case "system":
+		return or.SystemMessage(message.Content), nil
+	case "user":
+		return or.UserMessage(message.Content), nil
+	case "assistant":
+		return or.AssistantMessage(message.Content), nil
+	default:
+		return or.ChatCompletionMessage{}, fmt.Errorf("chat message role %s is not supported", message.Role)
+	}
+}
+
+func buildOpenRouterChatResponse(resp or.ChatCompletionResponse) (*ChatResponse, error) {
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	choices := make([]Choice, 0, len(resp.Choices))
+	for _, choice := range resp.Choices {
+		text := choice.Message.Content.Text
+		choices = append(choices, Choice{
+			Message: ChoiceMessage{
+				Content: &text,
+				Role:    choice.Message.Role,
+			},
+		})
+	}
+
+	return &ChatResponse{
+		Choices: choices,
+		Model:   resp.Model,
+		Usage:   buildOpenRouterUsage(resp.Usage),
+		Raw:     raw,
 	}, nil
+}
+
+func buildOpenRouterStreamResponse(chunk or.ChatCompletionStreamResponse) (*ChatResponse, error) {
+	raw, err := json.Marshal(chunk)
+	if err != nil {
+		return nil, err
+	}
+
+	choices := make([]Choice, 0, len(chunk.Choices))
+	for _, choice := range chunk.Choices {
+		text := choice.Delta.Content
+		choices = append(choices, Choice{
+			Message: ChoiceMessage{
+				Content: &text,
+				Role:    choice.Delta.Role,
+			},
+		})
+	}
+
+	return &ChatResponse{
+		Choices: choices,
+		Model:   chunk.Model,
+		Usage:   buildOpenRouterUsage(chunk.Usage),
+		Raw:     raw,
+	}, nil
+}
+
+func buildOpenRouterUsage(usage *or.Usage) *Usage {
+	if usage == nil {
+		return nil
+	}
+	return &Usage{
+		InputTokens:  usage.PromptTokens,
+		OutputTokens: usage.CompletionTokens,
+	}
+}
+
+type openRouterEmbedding struct{}
+
+func (e *openRouterEmbedding) Create(context.Context, CreateEmbeddingRequest) (*EmbeddingResponse, error) {
+	return nil, errors.New("openrouter embedding is not implemented")
+}
+
+func (e *openRouterEmbedding) Ping(context.Context) error {
+	return errors.New("openrouter embedding is not implemented")
 }
 
 type OpenRouterCredits struct {
@@ -65,12 +268,12 @@ type OpenRouterCredits struct {
 }
 
 func (client *OpenRouterClient) GetCredits(ctx context.Context) (*OpenRouterCredits, error) {
-	req, err := http.NewRequest(http.MethodGet, "https://openrouter.ai/api/v1/auth/key", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://openrouter.ai/api/v1/auth/key", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+client.apiKey)
+	req.Header.Set("Authorization", "Bearer "+client.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	httpClient := &http.Client{}

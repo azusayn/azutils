@@ -15,6 +15,15 @@ type MailClient struct {
 	ServicePort     string
 }
 
+func NewMailClient(from, serviceAuthCode, serviceDomain, servicePort string) *MailClient {
+	return &MailClient{
+		From:            from,
+		ServiceAuthCode: serviceAuthCode,
+		ServiceDomain:   serviceDomain,
+		ServicePort:     servicePort,
+	}
+}
+
 func (m *MailClient) SendEmail(recipients []string, subject string, text, html []byte) error {
 	e := &email.Email{
 		From:    m.From,

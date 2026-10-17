@@ -11,9 +11,14 @@ type ChatService interface {
 	Ping(ctx context.Context) error
 }
 
+type MessagePart struct {
+	Text     *string
+	ImageURL *string
+}
+
 type Message struct {
-	Role    string
-	Content string
+	Role  string
+	Parts []*MessagePart
 }
 
 type ResponseSchema struct {

@@ -171,14 +171,96 @@ func buildOpenRouterChatRequest(req CreateChatRequest, opts []CreateChatOption) 
 func buildOpenRouterMessage(message Message) (or.ChatCompletionMessage, error) {
 	switch message.Role {
 	case "system":
-		return or.SystemMessage(message.Content), nil
+		return buildOpenRouterSystemMessage(message.Parts)
 	case "user":
-		return or.UserMessage(message.Content), nil
+		return buildOpenRouterUserMessage(message.Parts)
 	case "assistant":
-		return or.AssistantMessage(message.Content), nil
+		return buildOpenRouterAssistantMessage(message.Parts)
 	default:
 		return or.ChatCompletionMessage{}, fmt.Errorf("chat message role %s is not supported", message.Role)
 	}
+}
+
+func buildOpenRouterUserMessage(parts []*MessagePart) (or.ChatCompletionMessage, error) {
+	if len(parts) == 0 {
+		return or.ChatCompletionMessage{}, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]or.ChatMessagePart, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || (part.Text == nil && part.ImageURL == nil) {
+			return or.ChatCompletionMessage{}, fmt.Errorf("chat message part requires text or an image URL")
+		}
+		if part.Text != nil {
+			converted = append(converted, or.ChatMessagePart{
+				Type: or.ChatMessagePartTypeText,
+				Text: *part.Text,
+			})
+		}
+		if part.ImageURL != nil {
+			converted = append(converted, or.ChatMessagePart{
+				Type: or.ChatMessagePartTypeImageURL,
+				ImageURL: &or.ChatMessageImageURL{
+					URL: *part.ImageURL,
+				},
+			})
+		}
+	}
+	return or.ChatCompletionMessage{
+		Role: or.ChatMessageRoleUser,
+		Content: or.Content{
+			Multi: converted,
+		},
+	}, nil
+}
+
+func buildOpenRouterSystemMessage(parts []*MessagePart) (or.ChatCompletionMessage, error) {
+	if len(parts) == 0 {
+		return or.ChatCompletionMessage{}, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]or.ChatMessagePart, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || part.Text == nil {
+			return or.ChatCompletionMessage{}, fmt.Errorf("chat message part requires text")
+		}
+		if part.ImageURL != nil {
+			return or.ChatCompletionMessage{}, fmt.Errorf("chat message role system does not support images")
+		}
+		converted = append(converted, or.ChatMessagePart{
+			Type: or.ChatMessagePartTypeText,
+			Text: *part.Text,
+		})
+	}
+	return or.ChatCompletionMessage{
+		Role: or.ChatMessageRoleSystem,
+		Content: or.Content{
+			Multi: converted,
+		},
+	}, nil
+}
+
+func buildOpenRouterAssistantMessage(parts []*MessagePart) (or.ChatCompletionMessage, error) {
+	if len(parts) == 0 {
+		return or.ChatCompletionMessage{}, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]or.ChatMessagePart, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || part.Text == nil {
+			return or.ChatCompletionMessage{}, fmt.Errorf("chat message part requires text")
+		}
+		if part.ImageURL != nil {
+			return or.ChatCompletionMessage{}, fmt.Errorf("chat message role assistant does not support images")
+		}
+		converted = append(converted, or.ChatMessagePart{
+			Type: or.ChatMessagePartTypeText,
+			Text: *part.Text,
+		})
+	}
+	return or.ChatCompletionMessage{
+		Role: or.ChatMessageRoleAssistant,
+		Content: or.Content{
+			Multi: converted,
+		},
+	}, nil
 }
 
 func buildOpenRouterChatResponse(resp or.ChatCompletionResponse) (*ChatResponse, error) {

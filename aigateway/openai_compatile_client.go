@@ -200,16 +200,106 @@ func buildChatParams(req CreateChatRequest, opts []CreateChatOption) (openai.Cha
 func buildChatMessage(message Message) (openai.ChatCompletionMessageParamUnion, error) {
 	switch message.Role {
 	case "system":
-		return openai.SystemMessage(message.Content), nil
+		parts, err := buildSystemMessageParts(message.Parts)
+		if err != nil {
+			return openai.ChatCompletionMessageParamUnion{}, err
+		}
+		return openai.SystemMessage(parts), nil
 	case "user":
-		return openai.UserMessage(message.Content), nil
+		parts, err := buildUserMessageParts(message.Parts)
+		if err != nil {
+			return openai.ChatCompletionMessageParamUnion{}, err
+		}
+		return openai.UserMessage(parts), nil
 	case "assistant":
-		return openai.AssistantMessage(message.Content), nil
+		parts, err := buildAssistantMessageParts(message.Parts)
+		if err != nil {
+			return openai.ChatCompletionMessageParamUnion{}, err
+		}
+		return openai.AssistantMessage(parts), nil
 	case "developer":
-		return openai.DeveloperMessage(message.Content), nil
+		parts, err := buildDeveloperMessageParts(message.Parts)
+		if err != nil {
+			return openai.ChatCompletionMessageParamUnion{}, err
+		}
+		return openai.DeveloperMessage(parts), nil
 	default:
 		return openai.ChatCompletionMessageParamUnion{}, fmt.Errorf("chat message role %s is not supported", message.Role)
 	}
+}
+
+func buildUserMessageParts(parts []*MessagePart) ([]openai.ChatCompletionContentPartUnionParam, error) {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]openai.ChatCompletionContentPartUnionParam, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || (part.Text == nil && part.ImageURL == nil) {
+			return nil, fmt.Errorf("chat message part requires text or an image URL")
+		}
+		if part.Text != nil {
+			converted = append(converted, openai.TextContentPart(*part.Text))
+		}
+		if part.ImageURL != nil {
+			converted = append(converted, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+				URL: *part.ImageURL,
+			}))
+		}
+	}
+	return converted, nil
+}
+
+func buildSystemMessageParts(parts []*MessagePart) ([]openai.ChatCompletionContentPartTextParam, error) {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]openai.ChatCompletionContentPartTextParam, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || part.Text == nil {
+			return nil, fmt.Errorf("chat message part requires text")
+		}
+		if part.ImageURL != nil {
+			return nil, fmt.Errorf("chat message role system does not support images")
+		}
+		converted = append(converted, openai.ChatCompletionContentPartTextParam{Text: *part.Text})
+	}
+	return converted, nil
+}
+
+func buildDeveloperMessageParts(parts []*MessagePart) ([]openai.ChatCompletionContentPartTextParam, error) {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]openai.ChatCompletionContentPartTextParam, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || part.Text == nil {
+			return nil, fmt.Errorf("chat message part requires text")
+		}
+		if part.ImageURL != nil {
+			return nil, fmt.Errorf("chat message role developer does not support images")
+		}
+		converted = append(converted, openai.ChatCompletionContentPartTextParam{Text: *part.Text})
+	}
+	return converted, nil
+}
+
+func buildAssistantMessageParts(parts []*MessagePart) ([]openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion, error) {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("chat message requires a part")
+	}
+	converted := make([]openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion, 0, len(parts))
+	for _, part := range parts {
+		if part == nil || part.Text == nil {
+			return nil, fmt.Errorf("chat message part requires text")
+		}
+		if part.ImageURL != nil {
+			return nil, fmt.Errorf("chat message role assistant does not support images")
+		}
+		converted = append(converted, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+			OfText: &openai.ChatCompletionContentPartTextParam{Text: *part.Text},
+		})
+	}
+	return converted, nil
 }
 
 func buildChatContent(content string, present bool) *string {

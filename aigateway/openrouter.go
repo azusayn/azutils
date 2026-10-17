@@ -16,9 +16,9 @@ type OpenRouterClient struct {
 	sdk *or.Client
 }
 
-func NewOpenRouterClient(provider BaseProvider) *OpenRouterClient {
+func NewOpenRouterClient(provider Provider) *OpenRouterClient {
 	client := &OpenRouterClient{
-		sdk: or.NewClient(provider.APIKey),
+		sdk: or.NewClient(provider.GetAPIKey()),
 	}
 
 	client.Chat = &openRouterChat{client: client}

@@ -30,5 +30,8 @@ type Model struct {
 }
 
 type Provider interface {
+	GetName() string
+	GetBaseURL() string
+	GetAPIKey() string
 	ListModels(ctx context.Context) ([]*Model, error)
 }

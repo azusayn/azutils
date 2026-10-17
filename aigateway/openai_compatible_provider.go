@@ -17,6 +17,18 @@ func NewOpenAICompatibleProvider(base BaseProvider) *OpenAICompatibleProvider {
 	return &OpenAICompatibleProvider{BaseProvider: base}
 }
 
+func (p *OpenAICompatibleProvider) GetName() string {
+	return p.Name
+}
+
+func (p *OpenAICompatibleProvider) GetBaseURL() string {
+	return p.BaseURL
+}
+
+func (p *OpenAICompatibleProvider) GetAPIKey() string {
+	return p.APIKey
+}
+
 type ListModelsResponse struct {
 	Data []openAIModel `json:"data"`
 }

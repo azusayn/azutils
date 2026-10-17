@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 )
 
@@ -21,9 +22,13 @@ type OpenAICompatileClient struct {
 	sdk openai.Client
 }
 
-func NewOpenAICompatileClient() *OpenAICompatileClient {
+func NewOpenAICompatileClient(provider Provider) *OpenAICompatileClient {
+	opts := []option.RequestOption{option.WithAPIKey(provider.GetAPIKey())}
+	if baseURL := provider.GetBaseURL(); baseURL != "" {
+		opts = append(opts, option.WithBaseURL(baseURL))
+	}
 	client := &OpenAICompatileClient{
-		sdk: openai.NewClient(),
+		sdk: openai.NewClient(opts...),
 	}
 
 	client.Chat = &openaiCompatileChat{client: client}

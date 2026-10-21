@@ -54,16 +54,38 @@ type Tool struct {
 	Parameters  json.RawMessage
 }
 
-type Usage struct {
-	InputTokens  int
-	OutputTokens int
+// Breakdown of tokens used in the prompt.
+type CompletionUsagePromptTokensDetails struct {
+	CacheWriteTokens int64
+	CachedTokens     int64
+	AudioTokens      int64
+	ImageTokens      int64
+	TextTokens       int64
+}
+
+type CompletionUsageCompletionTokensDetails struct {
+	AcceptedPredictionTokens int64
+	RejectedPredictionTokens int64
+	AudioTokens              int64
+	TextTokens               int64
+	ReasoningTokens          int64
+}
+
+// Usage statistics for the completion request.
+type CompletionUsage struct {
+	PromptTokens            int64
+	PromptTokensDetails     CompletionUsagePromptTokensDetails
+	CompletionTokens        int64
+	CompletionTokensDetails CompletionUsageCompletionTokensDetails
+	// TotalTokens = PromptTokens + CompletionTokens.
+	TotalTokens int64
 }
 
 type ChatResponse struct {
 	Choices []Choice
 	Model   string
 	// `ChatResponse.Usage` 定义为 `*Usage`，以便在模型服务商返回 Token 用量时由 API 直接暴露，使调用方无需深入 `Raw` 自行查找相关字段。
-	Usage *Usage
+	Usage *CompletionUsage
 	// `Raw` 类型为 `json.RawMessage`，保存当前 API 未做解析的原始响应体，
 	// 以适应复杂多变的厂商参数。
 	Raw json.RawMessage
@@ -96,6 +118,6 @@ type Embedding struct {
 
 type EmbeddingResponse struct {
 	Embeddings []Embedding
-	Usage      *Usage
+	Usage      *CompletionUsage
 	Model      string
 }

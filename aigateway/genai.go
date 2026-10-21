@@ -300,14 +300,56 @@ func buildGenaiChatResponse(resp *genai.GenerateContentResponse) (*ChatResponse,
 	}, nil
 }
 
-func buildGenaiUsage(usage *genai.GenerateContentResponseUsageMetadata) *Usage {
+func buildGenaiUsage(usage *genai.GenerateContentResponseUsageMetadata) *CompletionUsage {
 	if usage == nil {
 		return nil
 	}
-	return &Usage{
-		InputTokens:  int(usage.PromptTokenCount),
-		OutputTokens: int(usage.CandidatesTokenCount),
+	// Ref: https://github.com/BerriAI/litellm/issues/23731
+	// Ref: https://docs.cloud.google.com/python/docs/reference/aiplatform/latest/google.cloud.aiplatform_v1beta1.types.UsageMetadata
+	prompt := countModalities(usage.PromptTokensDetails)
+	toolUse := countModalities(usage.ToolUsePromptTokensDetails)
+	candidates := countModalities(usage.CandidatesTokensDetails)
+	return &CompletionUsage{
+		PromptTokens: int64(usage.PromptTokenCount) + int64(usage.ToolUsePromptTokenCount),
+		PromptTokensDetails: CompletionUsagePromptTokensDetails{
+			CachedTokens: int64(usage.CachedContentTokenCount),
+			AudioTokens:  prompt.audio + toolUse.audio,
+			ImageTokens:  prompt.image + toolUse.image,
+			TextTokens:   prompt.text + toolUse.text,
+		},
+		CompletionTokens: int64(usage.CandidatesTokenCount) + int64(usage.ThoughtsTokenCount),
+		CompletionTokensDetails: CompletionUsageCompletionTokensDetails{
+			AudioTokens:     candidates.audio,
+			TextTokens:      candidates.text,
+			ReasoningTokens: int64(usage.ThoughtsTokenCount),
+		},
+		TotalTokens: int64(usage.TotalTokenCount),
 	}
+}
+
+type modalityCounts struct {
+	text  int64
+	image int64
+	audio int64
+}
+
+func countModalities(details []*genai.ModalityTokenCount) modalityCounts {
+	var counts modalityCounts
+	for _, detail := range details {
+		if detail == nil {
+			continue
+		}
+		count := int64(detail.TokenCount)
+		switch detail.Modality {
+		case genai.MediaModalityText:
+			counts.text += count
+		case genai.MediaModalityImage:
+			counts.image += count
+		case genai.MediaModalityAudio:
+			counts.audio += count
+		}
+	}
+	return counts
 }
 
 type genaiEmbedding struct{}

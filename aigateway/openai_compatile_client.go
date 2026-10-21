@@ -310,13 +310,28 @@ func buildChatContent(content string, present bool) *string {
 	return &content
 }
 
-func buildChatUsage(usage openai.CompletionUsage, present bool) *Usage {
+func buildChatUsage(usage openai.CompletionUsage, present bool) *CompletionUsage {
 	if !present {
 		return nil
 	}
-	return &Usage{
-		InputTokens:  int(usage.PromptTokens),
-		OutputTokens: int(usage.CompletionTokens),
+	return &CompletionUsage{
+		PromptTokens: usage.PromptTokens,
+		PromptTokensDetails: CompletionUsagePromptTokensDetails{
+			CacheWriteTokens: usage.PromptTokensDetails.CacheWriteTokens,
+			CachedTokens:     usage.PromptTokensDetails.CachedTokens,
+			AudioTokens:      usage.PromptTokensDetails.AudioTokens,
+			ImageTokens:      usage.PromptTokensDetails.ImageTokens,
+			TextTokens:       usage.PromptTokensDetails.TextTokens,
+		},
+		CompletionTokens: usage.CompletionTokens,
+		CompletionTokensDetails: CompletionUsageCompletionTokensDetails{
+			AcceptedPredictionTokens: usage.CompletionTokensDetails.AcceptedPredictionTokens,
+			RejectedPredictionTokens: usage.CompletionTokensDetails.RejectedPredictionTokens,
+			AudioTokens:              usage.CompletionTokensDetails.AudioTokens,
+			TextTokens:               usage.CompletionTokensDetails.TextTokens,
+			ReasoningTokens:          usage.CompletionTokensDetails.ReasoningTokens,
+		},
+		TotalTokens: usage.TotalTokens,
 	}
 }
 
@@ -340,6 +355,9 @@ func (c *openaiCompatileEmbedding) Create(ctx context.Context, req CreateEmbeddi
 	}
 
 	var results []Embedding
+	var promptTokens int64
+	var totalTokens int64
+	var hasUsage bool
 	for i := 0; i < len(texts); i += maxEmbeddingBatchSize {
 		end := i + maxEmbeddingBatchSize
 		if end > len(texts) {
@@ -359,6 +377,11 @@ func (c *openaiCompatileEmbedding) Create(ctx context.Context, req CreateEmbeddi
 		if err != nil {
 			return nil, err
 		}
+		if resp.JSON.Usage.Valid() {
+			hasUsage = true
+			promptTokens += resp.Usage.PromptTokens
+			totalTokens += resp.Usage.TotalTokens
+		}
 
 		for _, d := range resp.Data {
 			vec := make([]float32, len(d.Embedding))
@@ -376,10 +399,17 @@ func (c *openaiCompatileEmbedding) Create(ctx context.Context, req CreateEmbeddi
 		return a.Index - b.Index
 	})
 
-	return &EmbeddingResponse{
+	out := &EmbeddingResponse{
 		Embeddings: results,
 		Model:      req.Model,
-	}, nil
+	}
+	if hasUsage {
+		out.Usage = &CompletionUsage{
+			PromptTokens: promptTokens,
+			TotalTokens:  totalTokens,
+		}
+	}
+	return out, nil
 }
 
 func (c *openaiCompatileEmbedding) Ping(ctx context.Context) error {

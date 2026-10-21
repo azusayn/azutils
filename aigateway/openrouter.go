@@ -313,13 +313,23 @@ func buildOpenRouterStreamResponse(chunk or.ChatCompletionStreamResponse) (*Chat
 	}, nil
 }
 
-func buildOpenRouterUsage(usage *or.Usage) *Usage {
+func buildOpenRouterUsage(usage *or.Usage) *CompletionUsage {
 	if usage == nil {
 		return nil
 	}
-	return &Usage{
-		InputTokens:  usage.PromptTokens,
-		OutputTokens: usage.CompletionTokens,
+	return &CompletionUsage{
+		PromptTokens: int64(usage.PromptTokens),
+		PromptTokensDetails: CompletionUsagePromptTokensDetails{
+			CacheWriteTokens: int64(usage.PromptTokenDetails.CacheWriteTokens),
+			CachedTokens:     int64(usage.PromptTokenDetails.CachedTokens),
+			AudioTokens:      int64(usage.PromptTokenDetails.AudioTokens),
+		},
+		CompletionTokens: int64(usage.CompletionTokens),
+		CompletionTokensDetails: CompletionUsageCompletionTokensDetails{
+			AudioTokens:     int64(usage.CompletionTokenDetails.AudioTokens),
+			ReasoningTokens: int64(usage.CompletionTokenDetails.ReasoningTokens),
+		},
+		TotalTokens: int64(usage.TotalTokens),
 	}
 }
 

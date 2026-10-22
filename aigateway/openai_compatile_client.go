@@ -3,6 +3,7 @@ package aigateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -15,6 +16,18 @@ const (
 	maxEmbeddingBatchSize = 2048
 	dummyPayload          = "ping"
 )
+
+func attempt(maxAttempts int, fn func() error) error {
+	var merr error
+	for range maxAttempts {
+		if err := fn(); err != nil {
+			merr = errors.Join(merr, err)
+			continue
+		}
+		return nil
+	}
+	return merr
+}
 
 type OpenAICompatileClient struct {
 	Chat      ChatService
@@ -42,15 +55,41 @@ type openaiCompatileChat struct {
 	client *OpenAICompatileClient
 }
 
+type openaiChatParams struct {
+	completionParams openai.ChatCompletionNewParams
+	attempts         int
+	schema           *compiledSchema
+	checkSchema      bool
+}
+
 func (c *openaiCompatileChat) Create(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (*ChatResponse, error) {
 	params, err := buildChatParams(req, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := c.client.sdk.Chat.Completions.New(ctx, params)
-	if err != nil {
+	var resp *openai.ChatCompletion
+	createChatCompletion := func() error {
+		v, err := c.client.sdk.Chat.Completions.New(ctx, params.completionParams)
+		if err != nil {
+			return err
+		}
+		resp = v
+		if !params.checkSchema {
+			return nil
+		}
+		for _, choice := range resp.Choices {
+			if !responseMatchesSchema(choice.Message.Content, params.schema) {
+				return fmt.Errorf("response %q did not match schema: %q", choice.Message.Content, params.schema.raw)
+			}
+		}
+		return nil
+	}
+	if err := attempt(params.attempts, createChatCompletion); err != nil {
 		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("chat completion response is nil")
 	}
 
 	choices := make([]Choice, 0, len(resp.Choices))
@@ -71,16 +110,13 @@ func (c *openaiCompatileChat) Create(ctx context.Context, req CreateChatRequest,
 	}, nil
 }
 
-func (c *openaiCompatileChat) CreateStream(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (<-chan *ChatResponse, error) {
-	params, err := buildChatParams(req, opts)
+func (c *openaiCompatileChat) CreateStream(ctx context.Context, req CreateChatRequest, opts ...CreateStreamOption) (<-chan *ChatResponse, error) {
+	params, err := buildStreamParams(req, opts)
 	if err != nil {
 		return nil, err
 	}
-	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
-		IncludeUsage: openai.Bool(true),
-	}
 
-	stream := c.client.sdk.Chat.Completions.NewStreaming(ctx, params)
+	stream := c.client.sdk.Chat.Completions.NewStreaming(ctx, params.completionParams)
 	respCh := make(chan *ChatResponse)
 
 	go func() {
@@ -119,63 +155,63 @@ func (c *openaiCompatileChat) CreateStream(ctx context.Context, req CreateChatRe
 	return respCh, nil
 }
 
-func buildChatParams(req CreateChatRequest, opts []CreateChatOption) (openai.ChatCompletionNewParams, error) {
+func buildChatParams(req CreateChatRequest, opts []CreateChatOption) (openaiChatParams, error) {
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
 	for _, message := range req.Messages {
 		param, err := buildChatMessage(message)
 		if err != nil {
-			return openai.ChatCompletionNewParams{}, err
+			return openaiChatParams{}, err
 		}
 		messages = append(messages, param)
 	}
 
-	params := openai.ChatCompletionNewParams{
-		Model:    shared.ChatModel(req.Model),
-		Messages: messages,
+	params := openaiChatParams{
+		completionParams: openai.ChatCompletionNewParams{
+			Model:    shared.ChatModel(req.Model),
+			Messages: messages,
+		},
+		attempts: 1,
 	}
 	for _, opt := range opts {
 		switch opt.Type {
 		case CreateChatOptionTypeTemperature:
 			value, ok := opt.Value.(float64)
 			if !ok {
-				return openai.ChatCompletionNewParams{}, fmt.Errorf("chat option temperature requires a float64")
+				return openaiChatParams{}, fmt.Errorf("chat option temperature requires a float64")
 			}
-			params.Temperature = openai.Float(value)
+			params.completionParams.Temperature = openai.Float(value)
 
 		case CreateChatOptionTypeMaxTokens:
 			value, ok := opt.Value.(int)
 			if !ok {
-				return openai.ChatCompletionNewParams{}, fmt.Errorf("chat option max_tokens requires an int")
+				return openaiChatParams{}, fmt.Errorf("chat option max_tokens requires an int")
 			}
-			params.MaxTokens = openai.Int(int64(value))
+			params.completionParams.MaxTokens = openai.Int(int64(value))
+
+		case CreateChatOptionTypeMaxAttempts:
+			value, ok := opt.Value.(int)
+			if !ok {
+				return openaiChatParams{}, fmt.Errorf("chat option max_attempts requires an int")
+			}
+			params.attempts = value
 
 		case CreateChatOptionTypeResponseFormat:
 			schema, ok := opt.Value.(*ResponseSchema)
 			if !ok || schema == nil {
-				return openai.ChatCompletionNewParams{}, fmt.Errorf("chat option schema requires a response schema")
+				return openaiChatParams{}, fmt.Errorf("chat option schema requires a response schema")
 			}
-			if schema.UseSchemaFallback {
-				return openai.ChatCompletionNewParams{}, fmt.Errorf("chat option response_format schema fallback is not supported")
+			compiled, err := compileResponseSchema(schema.Schema)
+			if err != nil {
+				return openaiChatParams{}, fmt.Errorf("chat option schema is invalid: %w", err)
 			}
-			if schema.Strict {
-				params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
-					OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
-						JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-							Strict: openai.Bool(true),
-						},
-					},
-				}
-				break
-			}
-			format := shared.NewResponseFormatJSONObjectParam()
-			params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
-				OfJSONObject: &format,
-			}
+			params.schema = compiled
+			params.checkSchema = true
+			params.completionParams.ResponseFormat = openaiResponseFormat(schema)
 
 		case CreateChatOptionTypeTools:
 			tools, ok := opt.Value.([]Tool)
 			if !ok {
-				return openai.ChatCompletionNewParams{}, fmt.Errorf("chat option tools requires a tool list")
+				return openaiChatParams{}, fmt.Errorf("chat option tools requires a tool list")
 			}
 			converted := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
 			for _, tool := range tools {
@@ -186,19 +222,122 @@ func buildChatParams(req CreateChatRequest, opts []CreateChatOption) (openai.Cha
 				if len(tool.Parameters) > 0 {
 					var parameters shared.FunctionParameters
 					if err := json.Unmarshal(tool.Parameters, &parameters); err != nil {
-						return openai.ChatCompletionNewParams{}, fmt.Errorf("chat tool parameters are invalid: %w", err)
+						return openaiChatParams{}, fmt.Errorf("chat tool parameters are invalid: %w", err)
 					}
 					function.Parameters = parameters
 				}
 				converted = append(converted, openai.ChatCompletionFunctionTool(function))
 			}
-			params.Tools = converted
+			params.completionParams.Tools = converted
 
 		default:
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("chat option %s is not supported", opt.Type)
+			return openaiChatParams{}, fmt.Errorf("chat option %s is not supported", opt.Type)
 		}
 	}
 	return params, nil
+}
+
+type openaiStreamParams struct {
+	completionParams openai.ChatCompletionNewParams
+}
+
+func buildStreamParams(req CreateChatRequest, opts []CreateStreamOption) (openaiStreamParams, error) {
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		param, err := buildChatMessage(message)
+		if err != nil {
+			return openaiStreamParams{}, err
+		}
+		messages = append(messages, param)
+	}
+
+	params := openaiStreamParams{
+		completionParams: openai.ChatCompletionNewParams{
+			Model:    shared.ChatModel(req.Model),
+			Messages: messages,
+			StreamOptions: openai.ChatCompletionStreamOptionsParam{
+				IncludeUsage: openai.Bool(true),
+			},
+		},
+	}
+	for _, opt := range opts {
+		switch opt.Type {
+		case CreateStreamOptionTypeTemperature:
+			value, ok := opt.Value.(float64)
+			if !ok {
+				return openaiStreamParams{}, fmt.Errorf("stream option temperature requires a float64")
+			}
+			params.completionParams.Temperature = openai.Float(value)
+
+		case CreateStreamOptionTypeMaxTokens:
+			value, ok := opt.Value.(int)
+			if !ok {
+				return openaiStreamParams{}, fmt.Errorf("stream option max_tokens requires an int")
+			}
+			params.completionParams.MaxTokens = openai.Int(int64(value))
+
+		case CreateStreamOptionTypeResponseFormat:
+			format, ok := opt.Value.(*StreamResponseFormat)
+			if !ok || format == nil {
+				return openaiStreamParams{}, fmt.Errorf("stream option schema requires a response schema")
+			}
+			jsonSchema := shared.ResponseFormatJSONSchemaJSONSchemaParam{
+				Name:   "response",
+				Strict: openai.Bool(format.Strict),
+			}
+			if len(format.Schema) > 0 {
+				jsonSchema.Schema = format.Schema
+			}
+			params.completionParams.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+					JSONSchema: jsonSchema,
+				},
+			}
+
+		case CreateStreamOptionTypeTools:
+			tools, ok := opt.Value.([]Tool)
+			if !ok {
+				return openaiStreamParams{}, fmt.Errorf("stream option tools requires a tool list")
+			}
+			converted := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
+			for _, tool := range tools {
+				function := shared.FunctionDefinitionParam{Name: tool.Name}
+				if tool.Description != "" {
+					function.Description = openai.String(tool.Description)
+				}
+				if len(tool.Parameters) > 0 {
+					var parameters shared.FunctionParameters
+					if err := json.Unmarshal(tool.Parameters, &parameters); err != nil {
+						return openaiStreamParams{}, fmt.Errorf("stream tool parameters are invalid: %w", err)
+					}
+					function.Parameters = parameters
+				}
+				converted = append(converted, openai.ChatCompletionFunctionTool(function))
+			}
+			params.completionParams.Tools = converted
+
+		default:
+			return openaiStreamParams{}, fmt.Errorf("stream option %s is not supported", opt.Type)
+		}
+	}
+	return params, nil
+}
+
+func openaiResponseFormat(schema *ResponseSchema) openai.ChatCompletionNewParamsResponseFormatUnion {
+	jsonSchema := shared.ResponseFormatJSONSchemaJSONSchemaParam{
+		Name: "response",
+	}
+	if len(schema.Schema) > 0 {
+		jsonSchema.Schema = schema.Schema
+	}
+	if !schema.LocalSchemaCheck {
+		jsonSchema.Strict = openai.Bool(true)
+	}
+	return openai.ChatCompletionNewParamsResponseFormatUnion{
+		OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+			JSONSchema: jsonSchema,
+		},
+	}
 }
 
 func buildChatMessage(message Message) (openai.ChatCompletionMessageParamUnion, error) {

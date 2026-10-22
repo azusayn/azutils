@@ -97,9 +97,6 @@ func (c *genaiChat) Create(ctx context.Context, req CreateChatRequest, opts ...C
 			if !ok || schema == nil {
 				return nil, fmt.Errorf("chat option schema requires a response schema")
 			}
-			if schema.UseSchemaFallback {
-				return nil, fmt.Errorf("chat option response_format schema fallback is not supported")
-			}
 			config.ResponseMIMEType = "application/json"
 			if len(schema.Schema) == 0 {
 				break
@@ -149,7 +146,7 @@ func (c *genaiChat) Create(ctx context.Context, req CreateChatRequest, opts ...C
 	return buildGenaiChatResponse(resp)
 }
 
-func (c *genaiChat) CreateStream(context.Context, CreateChatRequest, ...CreateChatOption) (<-chan *ChatResponse, error) {
+func (c *genaiChat) CreateStream(context.Context, CreateChatRequest, ...CreateStreamOption) (<-chan *ChatResponse, error) {
 	return nil, errors.New("genai chat stream is not implemented")
 }
 

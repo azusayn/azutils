@@ -7,7 +7,7 @@ import (
 
 type ChatService interface {
 	Create(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (*ChatResponse, error)
-	CreateStream(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (<-chan *ChatResponse, error)
+	CreateStream(ctx context.Context, req CreateChatRequest, opts ...CreateStreamOption) (<-chan *ChatResponse, error)
 	Ping(ctx context.Context) error
 }
 
@@ -22,11 +22,9 @@ type Message struct {
 }
 
 type ResponseSchema struct {
-	// Strict 为 true 时要求输出字段与 schema 完全匹配，否则仅保证输出为合法 JSON。
-	Strict bool
-	Schema json.RawMessage
-	// UseSchemaFallback 为 true 时，若模型不支持 schema，则在内部改用回退方式重试。
-	UseSchemaFallback bool
+	// LocalSchemaCheck 为 true 时不向模型发送 strict 参数，仅在本地校验响应是否符合 schema；为 false 时向模型发送 strict: true，同时在本地进行校验。
+	LocalSchemaCheck bool
+	Schema           json.RawMessage
 }
 
 type CreateChatRequest struct {
@@ -38,6 +36,7 @@ type CreateChatOptionType string
 
 const (
 	CreateChatOptionTypeResponseFormat CreateChatOptionType = "response_format"
+	CreateChatOptionTypeMaxAttempts    CreateChatOptionType = "max_attempts"
 	CreateChatOptionTypeTools          CreateChatOptionType = "tools"
 	CreateChatOptionTypeTemperature    CreateChatOptionType = "temperature"
 	CreateChatOptionTypeMaxTokens      CreateChatOptionType = "max_tokens"
@@ -50,14 +49,26 @@ type CreateChatOption struct {
 	Value any
 }
 
-func WithResponseFormat(schema json.RawMessage, strict bool, useSchemaFallback bool) CreateChatOption {
+// WithResponseFormat 设置响应的 JSON Schema 格式。
+// localSchemaCheck 为 true 时不向模型发送 strict 参数，仅在本地校验；为 false 时向模型发送 strict: true，同时在本地进行校验。
+func WithResponseFormat(schema json.RawMessage, localSchemaCheck bool) CreateChatOption {
 	return CreateChatOption{
 		Type: CreateChatOptionTypeResponseFormat,
 		Value: &ResponseSchema{
-			Schema:            schema,
-			Strict:            strict,
-			UseSchemaFallback: useSchemaFallback,
+			Schema:           schema,
+			LocalSchemaCheck: localSchemaCheck,
 		},
+	}
+}
+
+// WithMaxAttempts 设置最大请求次数，默认为 1.
+func WithMaxAttempts(maxAttempts int) CreateChatOption {
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	return CreateChatOption{
+		Type:  CreateChatOptionTypeMaxAttempts,
+		Value: maxAttempts,
 	}
 }
 
@@ -78,6 +89,56 @@ func WithTemperature(temperature float64) CreateChatOption {
 func WithMaxTokens(maxTokens int) CreateChatOption {
 	return CreateChatOption{
 		Type:  CreateChatOptionTypeMaxTokens,
+		Value: maxTokens,
+	}
+}
+
+type CreateStreamOptionType string
+
+const (
+	CreateStreamOptionTypeResponseFormat CreateStreamOptionType = "response_format"
+	CreateStreamOptionTypeTools          CreateStreamOptionType = "tools"
+	CreateStreamOptionTypeTemperature    CreateStreamOptionType = "temperature"
+	CreateStreamOptionTypeMaxTokens      CreateStreamOptionType = "max_tokens"
+)
+
+type CreateStreamOption struct {
+	Type  CreateStreamOptionType
+	Value any
+}
+
+type StreamResponseFormat struct {
+	Schema json.RawMessage
+	Strict bool
+}
+
+func WithStreamResponseFormat(schema json.RawMessage, strict bool) CreateStreamOption {
+	return CreateStreamOption{
+		Type: CreateStreamOptionTypeResponseFormat,
+		Value: &StreamResponseFormat{
+			Schema: schema,
+			Strict: strict,
+		},
+	}
+}
+
+func WithStreamTools(tools []Tool) CreateStreamOption {
+	return CreateStreamOption{
+		Type:  CreateStreamOptionTypeTools,
+		Value: tools,
+	}
+}
+
+func WithStreamTemperature(temperature float64) CreateStreamOption {
+	return CreateStreamOption{
+		Type:  CreateStreamOptionTypeTemperature,
+		Value: temperature,
+	}
+}
+
+func WithStreamMaxTokens(maxTokens int) CreateStreamOption {
+	return CreateStreamOption{
+		Type:  CreateStreamOptionTypeMaxTokens,
 		Value: maxTokens,
 	}
 }

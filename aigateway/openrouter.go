@@ -44,12 +44,11 @@ func (c *openRouterChat) Create(ctx context.Context, req CreateChatRequest, opts
 	return buildOpenRouterChatResponse(resp)
 }
 
-func (c *openRouterChat) CreateStream(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (<-chan *ChatResponse, error) {
-	params, err := buildOpenRouterChatRequest(req, opts)
+func (c *openRouterChat) CreateStream(ctx context.Context, req CreateChatRequest, opts ...CreateStreamOption) (<-chan *ChatResponse, error) {
+	params, err := buildOpenRouterStreamRequest(req, opts)
 	if err != nil {
 		return nil, err
 	}
-	params.StreamOptions = &or.StreamOptions{IncludeUsage: true}
 
 	stream, err := c.client.sdk.CreateChatCompletionStream(ctx, params)
 	if err != nil {
@@ -127,20 +126,16 @@ func buildOpenRouterChatRequest(req CreateChatRequest, opts []CreateChatOption) 
 			if !ok || schema == nil {
 				return or.ChatCompletionRequest{}, fmt.Errorf("chat option schema requires a response schema")
 			}
-			if schema.UseSchemaFallback {
-				return or.ChatCompletionRequest{}, fmt.Errorf("chat option response_format schema fallback is not supported")
+			jsonSchema := &or.ChatCompletionResponseFormatJSONSchema{
+				Name:   "response",
+				Strict: !schema.LocalSchemaCheck,
 			}
-			if schema.Strict {
-				params.ResponseFormat = &or.ChatCompletionResponseFormat{
-					Type: or.ChatCompletionResponseFormatTypeJSONSchema,
-					JSONSchema: &or.ChatCompletionResponseFormatJSONSchema{
-						Strict: true,
-					},
-				}
-				break
+			if len(schema.Schema) > 0 {
+				jsonSchema.Schema = schema.Schema
 			}
 			params.ResponseFormat = &or.ChatCompletionResponseFormat{
-				Type: or.ChatCompletionResponseFormatTypeJSONObject,
+				Type:       or.ChatCompletionResponseFormatTypeJSONSchema,
+				JSONSchema: jsonSchema,
 			}
 
 		case CreateChatOptionTypeTools:
@@ -166,6 +161,82 @@ func buildOpenRouterChatRequest(req CreateChatRequest, opts []CreateChatOption) 
 
 		default:
 			return or.ChatCompletionRequest{}, fmt.Errorf("chat option %s is not supported", opt.Type)
+		}
+	}
+	return params, nil
+}
+
+func buildOpenRouterStreamRequest(req CreateChatRequest, opts []CreateStreamOption) (or.ChatCompletionRequest, error) {
+	messages := make([]or.ChatCompletionMessage, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		param, err := buildOpenRouterMessage(message)
+		if err != nil {
+			return or.ChatCompletionRequest{}, err
+		}
+		messages = append(messages, param)
+	}
+
+	params := or.ChatCompletionRequest{
+		Model:         req.Model,
+		Messages:      messages,
+		StreamOptions: &or.StreamOptions{IncludeUsage: true},
+	}
+	for _, opt := range opts {
+		switch opt.Type {
+		case CreateStreamOptionTypeTemperature:
+			value, ok := opt.Value.(float64)
+			if !ok {
+				return or.ChatCompletionRequest{}, fmt.Errorf("stream option temperature requires a float64")
+			}
+			params.Temperature = float32(value)
+
+		case CreateStreamOptionTypeMaxTokens:
+			value, ok := opt.Value.(int)
+			if !ok {
+				return or.ChatCompletionRequest{}, fmt.Errorf("stream option max_tokens requires an int")
+			}
+			params.MaxTokens = value
+
+		case CreateStreamOptionTypeResponseFormat:
+			format, ok := opt.Value.(*StreamResponseFormat)
+			if !ok || format == nil {
+				return or.ChatCompletionRequest{}, fmt.Errorf("stream option schema requires a response schema")
+			}
+			jsonSchema := &or.ChatCompletionResponseFormatJSONSchema{
+				Name:   "response",
+				Strict: format.Strict,
+			}
+			if len(format.Schema) > 0 {
+				jsonSchema.Schema = format.Schema
+			}
+			params.ResponseFormat = &or.ChatCompletionResponseFormat{
+				Type:       or.ChatCompletionResponseFormatTypeJSONSchema,
+				JSONSchema: jsonSchema,
+			}
+
+		case CreateStreamOptionTypeTools:
+			tools, ok := opt.Value.([]Tool)
+			if !ok {
+				return or.ChatCompletionRequest{}, fmt.Errorf("stream option tools requires a tool list")
+			}
+			converted := make([]or.Tool, 0, len(tools))
+			for _, tool := range tools {
+				function := &or.FunctionDefinition{Name: tool.Name}
+				if tool.Description != "" {
+					function.Description = tool.Description
+				}
+				if len(tool.Parameters) > 0 {
+					function.Parameters = tool.Parameters
+				}
+				converted = append(converted, or.Tool{
+					Type:     or.ToolTypeFunction,
+					Function: function,
+				})
+			}
+			params.Tools = converted
+
+		default:
+			return or.ChatCompletionRequest{}, fmt.Errorf("stream option %s is not supported", opt.Type)
 		}
 	}
 	return params, nil

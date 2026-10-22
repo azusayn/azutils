@@ -13,6 +13,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/revrost/go-openrouter v1.5.0
 	github.com/rivo/uniseg v0.4.7
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/sync v0.23.0
 	google.golang.org/genai v1.57.0
 )

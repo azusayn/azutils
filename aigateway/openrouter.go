@@ -122,10 +122,13 @@ func buildOpenRouterChatRequest(req CreateChatRequest, opts []CreateChatOption) 
 			}
 			params.MaxTokens = value
 
-		case CreateChatOptionTypeSchema:
+		case CreateChatOptionTypeResponseFormat:
 			schema, ok := opt.Value.(*ResponseSchema)
 			if !ok || schema == nil {
 				return or.ChatCompletionRequest{}, fmt.Errorf("chat option schema requires a response schema")
+			}
+			if schema.UseSchemaFallback {
+				return or.ChatCompletionRequest{}, fmt.Errorf("chat option response_format schema fallback is not supported")
 			}
 			if schema.Strict {
 				params.ResponseFormat = &or.ChatCompletionResponseFormat{

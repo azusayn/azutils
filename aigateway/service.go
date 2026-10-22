@@ -25,6 +25,8 @@ type ResponseSchema struct {
 	// Strict 为 true 时要求输出字段与 schema 完全匹配，否则仅保证输出为合法 JSON。
 	Strict bool
 	Schema json.RawMessage
+	// UseSchemaFallback 为 true 时，若模型不支持 schema，则在内部改用回退方式重试。
+	UseSchemaFallback bool
 }
 
 type CreateChatRequest struct {
@@ -35,10 +37,10 @@ type CreateChatRequest struct {
 type CreateChatOptionType string
 
 const (
-	CreateChatOptionTypeSchema      CreateChatOptionType = "schema"
-	CreateChatOptionTypeTools       CreateChatOptionType = "tools"
-	CreateChatOptionTypeTemperature CreateChatOptionType = "temperature"
-	CreateChatOptionTypeMaxTokens   CreateChatOptionType = "max_tokens"
+	CreateChatOptionTypeResponseFormat CreateChatOptionType = "response_format"
+	CreateChatOptionTypeTools          CreateChatOptionType = "tools"
+	CreateChatOptionTypeTemperature    CreateChatOptionType = "temperature"
+	CreateChatOptionTypeMaxTokens      CreateChatOptionType = "max_tokens"
 )
 
 // 为了保持接口干净，把不是所有模型都支持的选项 （工具调用、温度等）放在这个结构体中，下层实现
@@ -46,6 +48,38 @@ const (
 type CreateChatOption struct {
 	Type  CreateChatOptionType
 	Value any
+}
+
+func WithResponseFormat(schema json.RawMessage, strict bool, useSchemaFallback bool) CreateChatOption {
+	return CreateChatOption{
+		Type: CreateChatOptionTypeResponseFormat,
+		Value: &ResponseSchema{
+			Schema:            schema,
+			Strict:            strict,
+			UseSchemaFallback: useSchemaFallback,
+		},
+	}
+}
+
+func WithTools(tools []Tool) CreateChatOption {
+	return CreateChatOption{
+		Type:  CreateChatOptionTypeTools,
+		Value: tools,
+	}
+}
+
+func WithTemperature(temperature float64) CreateChatOption {
+	return CreateChatOption{
+		Type:  CreateChatOptionTypeTemperature,
+		Value: temperature,
+	}
+}
+
+func WithMaxTokens(maxTokens int) CreateChatOption {
+	return CreateChatOption{
+		Type:  CreateChatOptionTypeMaxTokens,
+		Value: maxTokens,
+	}
 }
 
 type Tool struct {

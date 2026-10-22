@@ -149,10 +149,13 @@ func buildChatParams(req CreateChatRequest, opts []CreateChatOption) (openai.Cha
 			}
 			params.MaxTokens = openai.Int(int64(value))
 
-		case CreateChatOptionTypeSchema:
+		case CreateChatOptionTypeResponseFormat:
 			schema, ok := opt.Value.(*ResponseSchema)
 			if !ok || schema == nil {
 				return openai.ChatCompletionNewParams{}, fmt.Errorf("chat option schema requires a response schema")
+			}
+			if schema.UseSchemaFallback {
+				return openai.ChatCompletionNewParams{}, fmt.Errorf("chat option response_format schema fallback is not supported")
 			}
 			if schema.Strict {
 				params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{

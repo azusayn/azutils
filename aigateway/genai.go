@@ -92,10 +92,13 @@ func (c *genaiChat) Create(ctx context.Context, req CreateChatRequest, opts ...C
 			}
 			config.MaxOutputTokens = int32(value)
 
-		case CreateChatOptionTypeSchema:
+		case CreateChatOptionTypeResponseFormat:
 			schema, ok := opt.Value.(*ResponseSchema)
 			if !ok || schema == nil {
 				return nil, fmt.Errorf("chat option schema requires a response schema")
+			}
+			if schema.UseSchemaFallback {
+				return nil, fmt.Errorf("chat option response_format schema fallback is not supported")
 			}
 			config.ResponseMIMEType = "application/json"
 			if len(schema.Schema) == 0 {

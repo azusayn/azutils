@@ -121,7 +121,7 @@ func (c *openaiCompatileChat) CreateStream(ctx context.Context, req CreateChatRe
 
 	go func() {
 		defer func() {
-			stream.Close()
+			stream.Close() //nolint:errcheck
 			close(respCh)
 		}()
 

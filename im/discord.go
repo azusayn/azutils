@@ -96,7 +96,7 @@ func (client *DiscordClient) SendMessage(ctx context.Context, messages []string)
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck
 
 		if code := resp.StatusCode; code != http.StatusOK && code != http.StatusNoContent {
 			responseBody, err := io.ReadAll(resp.Body)

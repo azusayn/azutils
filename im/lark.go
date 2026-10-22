@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larksdk "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -67,7 +66,7 @@ func NewLarkClient(appID, appSecret string, logger *slog.Logger) *LarkClient {
 		logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	}
 	return &LarkClient{
-		Client: lark.NewClient(appID, appSecret),
+		Client: larksdk.NewClient(appID, appSecret),
 		Logger: logger,
 	}
 }
@@ -85,7 +84,7 @@ func (client *LarkClient) SendMessage(ctx context.Context, chatID, text string) 
 			Build()).
 		Build()
 
-	resp, err := client.Im.V1.Message.Create(ctx, req)
+	resp, err := client.Im.Message.Create(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -187,12 +186,14 @@ func HandleLarkWebhook(larkClient *LarkClient, onMessage func(string) (string, e
 			larkClient.Error("failed to read from request", slog.Any("err", err))
 			return
 		}
-		defer r.Body.Close()
+		defer r.Body.Close() //nolint:errcheck
 
 		var challenge Challenge
 		if json.Unmarshal(body, &challenge) == nil && challenge.Challenge != "" {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"challenge": challenge.Challenge})
+			if err := json.NewEncoder(w).Encode(map[string]string{"challenge": challenge.Challenge}); err != nil {
+				larkClient.Error("failed to write challenge response", slog.Any("err", err))
+			}
 			return
 		}
 
@@ -204,7 +205,9 @@ func HandleLarkWebhook(larkClient *LarkClient, onMessage func(string) (string, e
 		defer func() {
 			// return 'code:0' to prevent retrying from feishu...
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"code": "0"})
+			if err := json.NewEncoder(w).Encode(map[string]string{"code": "0"}); err != nil {
+				larkClient.Error("failed to write ack response", slog.Any("err", err))
+			}
 		}()
 		eventID := req.Header.EventID
 		if _, ok := eventIDmap.Load(eventID); ok {

@@ -58,7 +58,7 @@ func (p *OpenAICompatibleProvider) ListModels(ctx context.Context) ([]*Model, er
 	if err != nil {
 		return nil, fmt.Errorf("list models request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("list models returned status %d", resp.StatusCode)

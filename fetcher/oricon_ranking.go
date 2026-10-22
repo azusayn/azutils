@@ -129,7 +129,9 @@ func FetchRankingDataFromOricon() (OriconRankingDataArray, error) {
 		retErr = err
 	})
 
-	c.Visit(OriconRankUrl)
+	if err := c.Visit(OriconRankUrl); err != nil && retErr == nil {
+		retErr = err
+	}
 
 	return []OriconRankingData{
 		dailySingleRankData,
@@ -142,12 +144,12 @@ func FetchRankingDataFromOricon() (OriconRankingDataArray, error) {
 func (oriconRankData OriconRankingDataArray) Dump() string {
 	var oriconRank strings.Builder
 	for _, data := range oriconRankData {
-		oriconRank.WriteString(fmt.Sprintf("### %s\n", data.Rule))
+		fmt.Fprintf(&oriconRank, "### %s\n", data.Rule)
 		for _, entry := range data.Entries {
 			if entry.Link == "" {
-				oriconRank.WriteString(fmt.Sprintf("%s - %s ", entry.Title, entry.Artist))
+				fmt.Fprintf(&oriconRank, "%s - %s ", entry.Title, entry.Artist)
 			} else {
-				oriconRank.WriteString(fmt.Sprintf("[%s](<https://%s/%s>) - %s ", entry.Title, DomainOricon, entry.Link, entry.Artist))
+				fmt.Fprintf(&oriconRank, "[%s](<https://%s/%s>) - %s ", entry.Title, DomainOricon, entry.Link, entry.Artist)
 			}
 			oriconRank.WriteString(oriconRankingTrendToEmoji(entry.Trend))
 			oriconRank.WriteRune('\n')

@@ -53,8 +53,8 @@ func GetGithubTrendingMessage() ([]string, error) {
 		if entry.Language != "" {
 			entry.Language = fmt.Sprintf("**%s** - ", entry.Language)
 		}
-		message.WriteString(fmt.Sprintf("## \\#%d  [%s](<%s>)\n%s⭐ %s\n",
-			idx+1, entry.Title, entry.Link, entry.Language, entry.Stars))
+		fmt.Fprintf(&message, "## \\#%d  [%s](<%s>)\n%s⭐ %s\n",
+			idx+1, entry.Title, entry.Link, entry.Language, entry.Stars)
 		message.WriteString(entry.Description + "\n")
 		// TODO: split by size.
 		if (idx+1)%5 == 0 {

@@ -150,10 +150,6 @@ func (c *genaiChat) CreateStream(context.Context, CreateChatRequest, ...CreateSt
 	return nil, errors.New("genai chat stream is not implemented")
 }
 
-func (c *genaiChat) Ping(context.Context) error {
-	return errors.New("genai chat ping is not implemented")
-}
-
 func buildGenaiSystemParts(parts []*MessagePart) ([]*genai.Part, error) {
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("chat message requires a part")
@@ -356,8 +352,4 @@ type genaiEmbedding struct{}
 
 func (e *genaiEmbedding) Create(context.Context, CreateEmbeddingRequest) (*EmbeddingResponse, error) {
 	return nil, errors.New("genai embedding is not implemented")
-}
-
-func (e *genaiEmbedding) Ping(context.Context) error {
-	return errors.New("genai embedding is not implemented")
 }

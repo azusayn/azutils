@@ -82,15 +82,6 @@ func (c *openRouterChat) CreateStream(ctx context.Context, req CreateChatRequest
 	return respCh, nil
 }
 
-func (c *openRouterChat) Ping(ctx context.Context) error {
-	_, err := c.client.sdk.CreateChatCompletion(ctx, or.ChatCompletionRequest{
-		Messages: []or.ChatCompletionMessage{
-			or.UserMessage(dummyPayload),
-		},
-	})
-	return err
-}
-
 func buildOpenRouterChatRequest(req CreateChatRequest, opts []CreateChatOption) (or.ChatCompletionRequest, error) {
 	messages := make([]or.ChatCompletionMessage, 0, len(req.Messages))
 	for _, message := range req.Messages {
@@ -411,8 +402,4 @@ type openRouterEmbedding struct{}
 
 func (e *openRouterEmbedding) Create(context.Context, CreateEmbeddingRequest) (*EmbeddingResponse, error) {
 	return nil, errors.New("openrouter embedding is not implemented")
-}
-
-func (e *openRouterEmbedding) Ping(context.Context) error {
-	return errors.New("openrouter embedding is not implemented")
 }

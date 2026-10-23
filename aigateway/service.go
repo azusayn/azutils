@@ -8,7 +8,6 @@ import (
 type ChatService interface {
 	Create(ctx context.Context, req CreateChatRequest, opts ...CreateChatOption) (*ChatResponse, error)
 	CreateStream(ctx context.Context, req CreateChatRequest, opts ...CreateStreamOption) (<-chan *ChatResponse, error)
-	Ping(ctx context.Context) error
 }
 
 type MessagePart struct {
@@ -197,7 +196,6 @@ type ChoiceMessage struct {
 
 type EmbeddingService interface {
 	Create(ctx context.Context, req CreateEmbeddingRequest) (*EmbeddingResponse, error)
-	Ping(ctx context.Context) error
 }
 
 type CreateEmbeddingRequest struct {

@@ -14,7 +14,6 @@ import (
 
 const (
 	maxEmbeddingBatchSize = 2048
-	dummyPayload          = "ping"
 )
 
 func attempt(maxAttempts int, fn func() error) error {
@@ -477,15 +476,6 @@ func buildChatUsage(usage openai.CompletionUsage, present bool) *CompletionUsage
 	}
 }
 
-func (c *openaiCompatileChat) Ping(ctx context.Context) error {
-	_, err := c.client.sdk.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.UserMessage(dummyPayload),
-		},
-	})
-	return err
-}
-
 type openaiCompatileEmbedding struct {
 	client *OpenAICompatileClient
 }
@@ -552,13 +542,4 @@ func (c *openaiCompatileEmbedding) Create(ctx context.Context, req CreateEmbeddi
 		}
 	}
 	return out, nil
-}
-
-func (c *openaiCompatileEmbedding) Ping(ctx context.Context) error {
-	_, err := c.client.sdk.Embeddings.New(ctx, openai.EmbeddingNewParams{
-		Input: openai.EmbeddingNewParamsInputUnion{
-			OfString: openai.String(dummyPayload),
-		},
-	})
-	return err
 }

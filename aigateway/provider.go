@@ -2,7 +2,7 @@ package aigateway
 
 import "context"
 
-type BaseProvider struct {
+type ProviderConfig struct {
 	Name    string
 	BaseURL string
 	APIKey  string

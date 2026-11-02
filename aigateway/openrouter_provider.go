@@ -8,28 +8,28 @@ import (
 )
 
 type OpenRouterProvider struct {
-	provider Provider
+	config ProviderConfig
 
 	sdk *or.Client
 }
 
-func NewOpenRouterProvider(provider Provider) *OpenRouterProvider {
+func NewOpenRouterProvider(provider ProviderConfig) *OpenRouterProvider {
 	return &OpenRouterProvider{
-		provider: provider,
-		sdk:      or.NewClient(provider.GetAPIKey()),
+		config: provider,
+		sdk:    or.NewClient(provider.APIKey),
 	}
 }
 
 func (p *OpenRouterProvider) GetName() string {
-	return p.provider.GetName()
+	return p.config.Name
 }
 
 func (p *OpenRouterProvider) GetBaseURL() string {
-	return p.provider.GetBaseURL()
+	return p.config.BaseURL
 }
 
 func (p *OpenRouterProvider) GetAPIKey() string {
-	return p.provider.GetAPIKey()
+	return p.config.APIKey
 }
 
 func (p *OpenRouterProvider) ListModels(ctx context.Context) ([]*Model, error) {

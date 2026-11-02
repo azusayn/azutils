@@ -10,11 +10,11 @@ import (
 )
 
 type OpenAICompatibleProvider struct {
-	BaseProvider
+	ProviderConfig
 }
 
-func NewOpenAICompatibleProvider(base BaseProvider) *OpenAICompatibleProvider {
-	return &OpenAICompatibleProvider{BaseProvider: base}
+func NewOpenAICompatibleProvider(base ProviderConfig) *OpenAICompatibleProvider {
+	return &OpenAICompatibleProvider{ProviderConfig: base}
 }
 
 func (p *OpenAICompatibleProvider) GetName() string {

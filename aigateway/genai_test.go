@@ -18,7 +18,7 @@ func TestGenai(t *testing.T) {
 		t.Skip("TEST_GENAI_API_KEY not set")
 	}
 
-	client, err := NewGenaiClient(ctx, NewOpenAICompatibleProvider(BaseProvider{APIKey: apiKey}))
+	client, err := NewGenaiClient(ctx, NewOpenAICompatibleProvider(ProviderConfig{APIKey: apiKey}))
 	if err != nil {
 		t.Fatal(err)
 	}

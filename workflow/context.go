@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 type contextKey string
@@ -11,7 +12,8 @@ const (
 	contextKeyWorkflowRun    contextKey = "workflow_run"
 	contextKeyEventID        contextKey = "event_id"
 	contextKeyWorkflowPool   contextKey = "pool"
-	contextKeyWorkflowNodeID contextKey = "nodeID"
+	contextKeyWorkflowNodeID contextKey = "node_id"
+	contextKeyNodeStatus     contextKey = "node_status"
 )
 
 func withWorkflowRun(ctx context.Context, workflowRun *WorkflowRun) context.Context {
@@ -61,4 +63,16 @@ func extractNodeID(ctx context.Context) (string, error) {
 		return "", errors.New("failed to extract node ID from context")
 	}
 	return nodeID, nil
+}
+
+func withNodeStatus(ctx context.Context, status *NodeStatus) context.Context {
+	return context.WithValue(ctx, contextKeyNodeStatus, status)
+}
+
+func extractNodeStatus(ctx context.Context) (*NodeStatus, error) {
+	status, ok := ctx.Value(contextKeyNodeStatus).(*NodeStatus)
+	if !ok || status == nil {
+		return nil, fmt.Errorf("failed to extract node status from context")
+	}
+	return status, nil
 }

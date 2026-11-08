@@ -12,9 +12,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	readyChannelCapacity         = 2000
+	workflowEventChannelCapacity = 1000
+)
+
 type WorkflowEvent struct {
-	ID      string
-	Payload json.RawMessage
+	ID            string
+	WorkflowRunID string
+	NodeID        string
+	Payload       json.RawMessage
 }
 
 type NodeInputConfig map[string]string
@@ -25,24 +32,249 @@ type NodeConfig struct {
 }
 
 type Workflow struct {
-	store             WorkflowStore
-	once              *sync.Once
-	eventCh           <-chan *WorkflowEvent
-	callbackByEventID map[string]func(context.Context, any) error
-	logger            *slog.Logger
+	once   sync.Once
+	logger *slog.Logger
 	// nodeConfigs maps node ID to its node config.
-	nodeConfigs   map[string]NodeConfig
-	subscriberMap *subscriberMap
+	nodeConfigs     map[string]NodeConfig
+	nodeExecutorNum int
+
+	store             WorkflowStore
+	readyCh           chan *ReadyNodeContext
+	eventCh           <-chan *WorkflowEvent
+	subscriberMap     *subscriberMap
+	callbackByEventID map[string]func(context.Context, any) error
 }
 
-func NewWorkflow(configs map[string]NodeConfig, store WorkflowStore) *Workflow {
-	return &Workflow{
+type WorkflowOption func(*Workflow) error
+
+func WithLogger(logger *slog.Logger) WorkflowOption {
+	return func(w *Workflow) error {
+		w.logger = logger
+		return nil
+	}
+}
+
+func WithNodeExecutorNum(executorNum int) WorkflowOption {
+	return func(w *Workflow) error {
+		w.nodeExecutorNum = executorNum
+		return nil
+	}
+}
+
+func NewWorkflow(configs map[string]NodeConfig, store WorkflowStore, opts ...WorkflowOption) *Workflow {
+	w := &Workflow{
 		store:             store,
 		callbackByEventID: make(map[string]func(context.Context, any) error),
 		logger:            slog.Default(),
 		nodeConfigs:       configs,
+		nodeExecutorNum:   1,
 		subscriberMap:     newSubscriberMap(store),
+		readyCh:           make(chan *ReadyNodeContext, readyChannelCapacity),
+		eventCh:           make(chan *WorkflowEvent, workflowEventChannelCapacity),
 	}
+
+	for _, opt := range opts {
+		opt(w)
+	}
+
+	return w
+}
+
+type ReadyNodeContext struct {
+	NodeID      string
+	WorkflowRun *WorkflowRun
+}
+
+func (w *Workflow) RecoverWorkflowRuns(ctx context.Context) error {
+	workflowRunModels, err := w.store.ListPendingWorkflowRuns(ctx, len(w.nodeConfigs))
+	if err != nil {
+		return err
+	}
+
+	for _, workflowRunModel := range workflowRunModels {
+		workflowRun, err := w.convertToWorkflowRun(workflowRunModel)
+		if err != nil {
+			w.logger.ErrorContext(
+				ctx,
+				"failed to recover workflow run",
+				slog.Any("err", err),
+			)
+			continue
+		}
+		readyNodeIDs, err := getReadyNodeIDs(w.nodeConfigs, workflowRunModel.NodeExecutions)
+		if err != nil {
+			return err
+		}
+		for _, nodeID := range readyNodeIDs {
+			w.readyCh <- &ReadyNodeContext{
+				NodeID:      nodeID,
+				WorkflowRun: workflowRun,
+			}
+		}
+	}
+
+	return nil
+}
+
+func (w *Workflow) StartNodeExecutors(ctx context.Context) error {
+	startExecutor := func(ctx context.Context) error {
+		for {
+			select {
+			case nodeContext := <-w.readyCh:
+				nodeStatus, err := nodeContext.WorkflowRun.execute(ctx, nodeContext.NodeID)
+				if err != nil {
+					w.logger.ErrorContext(
+						ctx,
+						"failed to execute node",
+						slog.Any("node_id", nodeContext.NodeID),
+						slog.Any("err", err),
+					)
+					continue
+				}
+
+				// TODO: scheduler.
+				if nodeStatus != NodeStatusCompleted {
+					continue
+				}
+				nodeConfig, ok := w.nodeConfigs[nodeContext.NodeID]
+				if !ok {
+					return fmt.Errorf("failed to get node config for %q", nodeContext.NodeID)
+				}
+				for _, nextNodeID := range nodeConfig.NextNodeIDs {
+					w.readyCh <- &ReadyNodeContext{
+						WorkflowRun: nodeContext.WorkflowRun,
+						NodeID:      nextNodeID,
+					}
+				}
+
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, w.nodeExecutorNum)
+
+	for range w.nodeExecutorNum {
+		wg.Go(func() {
+			errCh <- startExecutor(ctx)
+		})
+	}
+
+	wg.Wait()
+
+	var merr error
+	for range w.nodeExecutorNum {
+		merr = errors.Join(merr, <-errCh)
+	}
+
+	return merr
+}
+
+func (r *WorkflowRun) execute(ctx context.Context, nodeID string) (NodeStatus, error) {
+	// TODO: distinguish between node types and node IDs.
+	act, ok := Lookup(nodeID)
+	if !ok {
+		return NodeStatusPending, fmt.Errorf("node type %q not registered", nodeID)
+	}
+
+	ctx = withNodeID(ctx, nodeID)
+	ctx = withWorkflowPool(ctx, r.Pool)
+	ctx = withWorkflowRun(ctx, r)
+
+	nodeStatus := NodeStatusPending
+	ctx = withNodeStatus(ctx, &nodeStatus)
+
+	var execErr error
+	if err := act.Execute(ctx); err != nil {
+		nodeStatus = NodeStatusFailed
+		execErr = err
+	} else if nodeStatus != NodeStatusPause && nodeStatus != NodeStatusSkipped {
+		nodeStatus = NodeStatusCompleted
+	}
+
+	bytes, err := r.Pool.Dump()
+	if err != nil {
+		return nodeStatus, err
+	}
+
+	nodeExecution := map[string]NodeStatus{
+		nodeID: nodeStatus,
+	}
+
+	if err := r.store.UpdateWorkflowRunStatus(ctx, r.ID, nodeExecution, execErr, bytes); err != nil {
+		return nodeStatus, err
+	}
+
+	return nodeStatus, nil
+}
+
+func getReadyNodeIDs(configs map[string]NodeConfig, executions map[string]NodeStatus) ([]string, error) {
+	readyNodeIDs := make([]string, 0)
+
+	var dfs func(string) error
+	dfs = func(nodeID string) error {
+		status, ok := executions[nodeID]
+		if !ok {
+			return fmt.Errorf("failed to get status for %q", nodeID)
+		}
+
+		if status == NodeStatusPause || status == NodeStatusFailed || status == NodeStatusSkipped {
+			return nil
+		}
+
+		switch status {
+		case NodeStatusPause,
+			NodeStatusFailed,
+			NodeStatusSkipped:
+			return nil
+
+		case NodeStatusPending:
+			readyNodeIDs = append(readyNodeIDs, nodeID)
+
+		default:
+		}
+
+		config, ok := configs[nodeID]
+		if !ok {
+			return fmt.Errorf("failed to get config for %q", nodeID)
+		}
+
+		for _, nextNodeID := range config.NextNodeIDs {
+			if err := dfs(nextNodeID); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	if err := dfs(RootNodeID); err != nil {
+		return nil, err
+	}
+
+	return readyNodeIDs, nil
+}
+
+func (w *Workflow) convertToWorkflowRun(workflowRunModel *WorkflowRunModel) (*WorkflowRun, error) {
+	if workflowRunModel == nil {
+		return nil, errors.New("nil workflow run model")
+	}
+
+	pool := NewVariablePool(w.nodeConfigs)
+	if err := pool.Load(workflowRunModel.Data); err != nil {
+		return nil, err
+	}
+
+	return &WorkflowRun{
+		ID:            workflowRunModel.ID,
+		nodeConfigs:   w.nodeConfigs,
+		store:         w.store,
+		subscriberMap: w.subscriberMap,
+		readyCh:       w.readyCh,
+		Pool:          pool,
+	}, nil
 }
 
 // StartEventPoller 启动后台协程对工作流上的事件通道进行监听，并分发事件给注册的事件处理器。
@@ -67,68 +299,40 @@ func (w *Workflow) StartEventPoller(ctx context.Context) error {
 }
 
 func (w *Workflow) handleWorkflowEvent(ctx context.Context, event *WorkflowEvent) error {
-	fn := func(ctx context.Context, workflowRunID, nodeID string, interestEventIDs map[string]struct{}) error {
-		_, ok := interestEventIDs[event.ID]
-		if !ok {
-			return nil
-		}
-
+	fn := func(ctx context.Context) error {
 		callback, err := w.getRegisteredCallback(event.ID)
 		if err != nil {
 			w.logger.ErrorContext(ctx, "failed to get registered callback", slog.Any("err", err))
 			return nil
 		}
 
-		go func() {
-			if err := func() error {
-				storeWorkflowRun, err := w.store.GetWorkflowRun(ctx, workflowRunID)
-				if err != nil {
-					return err
-				}
+		workflowRunModel, err := w.store.GetWorkflowRun(ctx, event.WorkflowRunID)
+		if err != nil {
+			return err
+		}
 
-				p := NewVariablePool(w.nodeConfigs)
-				if err := p.Load(storeWorkflowRun.Data); err != nil {
-					return err
-				}
+		status, ok := workflowRunModel.NodeExecutions[event.NodeID]
+		if !ok {
+			return errors.New("failed to get node status")
+		}
 
-				var interestList map[string]map[string]struct{}
-				if err := json.Unmarshal([]byte(storeWorkflowRun.InterestList), &interestList); err != nil {
-					return err
-				}
+		workflowRun, err := w.convertToWorkflowRun(workflowRunModel)
+		if err != nil {
+			return err
+		}
 
-				workflowRun := &WorkflowRun{
-					ID:                workflowRunID,
-					nodeConfigs:       w.nodeConfigs,
-					store:             w.store,
-					subscriberMap:     w.subscriberMap,
-					Pool:              p,
-					currentNodeStatus: NodeStatusPause,
-					currentNodeID:     storeWorkflowRun.CurrentNodeID,
-				}
+		ctx = withEventID(ctx, event.ID)
+		ctx = withWorkflowRun(ctx, workflowRun)
+		ctx = withNodeID(ctx, event.NodeID)
+		ctx = withNodeStatus(ctx, &status)
 
-				ctx = withEventID(ctx, event.ID)
-				ctx = withWorkflowRun(ctx, workflowRun)
-				ctx = withNodeID(ctx, nodeID)
-
-				if err := callback(ctx, event.Payload); err != nil {
-					return err
-				}
-				return nil
-			}(); err != nil {
-				w.logger.ErrorContext(
-					ctx,
-					"failed to process workflow event callback",
-					slog.Any("err", err),
-					slog.Any("workflow_run_id", workflowRunID),
-					slog.Any("node_id", nodeID),
-				)
-			}
-		}()
-
+		if err := callback(ctx, event.Payload); err != nil {
+			return err
+		}
 		return nil
 	}
 
-	return w.subscriberMap.foreach(ctx, fn)
+	return w.subscriberMap.notify(ctx, event.ID, event.WorkflowRunID, event.NodeID, fn)
 }
 
 func (w *Workflow) getRegisteredCallback(eventID string) (func(context.Context, any) error, error) {
@@ -151,136 +355,51 @@ func (w *Workflow) RegisterCallback(eventID string, callback func(context.Contex
 }
 
 type WorkflowRun struct {
-	ID                string
-	Pool              *VariablePool
-	nodeConfigs       map[string]NodeConfig
-	store             WorkflowStore
-	subscriberMap     *subscriberMap
-	currentNodeID     string
-	currentNodeStatus NodeStatus
+	ID            string
+	nodeConfigs   map[string]NodeConfig
+	Pool          *VariablePool
+	store         WorkflowStore
+	subscriberMap *subscriberMap
+	readyCh       chan *ReadyNodeContext
 }
 
 // Run 根据输入条件执行事件联动链路。
 //
 // TODO: 提供变量池初始化参数而不是让调用者直接操纵 pool.
 func (w *Workflow) Run(ctx context.Context, initPoolFunc func(pool *VariablePool)) (*WorkflowRun, error) {
-	storeWorkflowRun, err := w.store.CreateWorkflowRun(ctx)
+	p := NewVariablePool(w.nodeConfigs)
+	initPoolFunc(p)
+
+	data, err := p.Dump()
 	if err != nil {
 		return nil, err
 	}
 
-	p := NewVariablePool(w.nodeConfigs)
-	initPoolFunc(p)
-
-	workflowRun := &WorkflowRun{
-		ID:            storeWorkflowRun.ID,
-		store:         w.store,
-		nodeConfigs:   w.nodeConfigs,
-		subscriberMap: w.subscriberMap,
-		Pool:          p,
-		currentNodeID: RootNodeID,
+	nodeExecutions := make(map[string]NodeStatus)
+	for nodeID := range w.nodeConfigs {
+		nodeExecutions[nodeID] = NodeStatusPending
 	}
 
-	go func() {
-		if err := workflowRun.executeOne(ctx); err != nil {
-			w.logger.ErrorContext(ctx, "failed to run workflow", slog.Any("err", err))
-		}
-	}()
+	workflowRunModel, err := w.store.CreateWorkflowRun(ctx, &WorkflowRunModel{
+		Data:           data,
+		CompletedNodes: 0,
+		NodeExecutions: nodeExecutions,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	workflowRun, err := w.convertToWorkflowRun(workflowRunModel)
+	if err != nil {
+		return nil, err
+	}
+
+	w.readyCh <- &ReadyNodeContext{
+		NodeID:      RootNodeID,
+		WorkflowRun: workflowRun,
+	}
 
 	return workflowRun, nil
-}
-
-func Skip(ctx context.Context) error {
-	workflowRun, err := extractWorkflowRun(ctx)
-	if err != nil {
-		return err
-	}
-	workflowRun.currentNodeStatus = NodeStatusSkipped
-	return nil
-}
-
-func WaitFor(ctx context.Context, eventID string) error {
-	workflowRun, err := extractWorkflowRun(ctx)
-	if err != nil {
-		return err
-	}
-	nodeID, err := extractNodeID(ctx)
-	if err != nil {
-		return err
-	}
-
-	workflowRun.currentNodeStatus = NodeStatusPause
-
-	return workflowRun.subscriberMap.set(ctx, workflowRun.ID, nodeID, eventID)
-}
-
-func Resume(ctx context.Context) error {
-	workflowRun, err := extractWorkflowRun(ctx)
-	if err != nil {
-		return err
-	}
-	nodeID, err := extractNodeID(ctx)
-	if err != nil {
-		return err
-	}
-	eventID, err := extractEventID(ctx)
-	if err != nil {
-		return err
-	}
-
-	if workflowRun.currentNodeStatus != NodeStatusPause {
-		return errors.New("cannot resume unsuspend node")
-	}
-	workflowRun.subscriberMap.unset(ctx, workflowRun.ID, nodeID, eventID)
-	workflowRun.currentNodeStatus = NodeStatusCompleted
-
-	if err := workflowRun.store.ResumeWrokflowRun(ctx, workflowRun.ID); err != nil {
-		return fmt.Errorf("failed to resume: %w", err)
-	}
-
-	return workflowRun.executeOne(ctx)
-}
-
-func (r *WorkflowRun) executeOne(ctx context.Context) error {
-	act, ok := Lookup(r.currentNodeID)
-	if !ok {
-		return fmt.Errorf("linkage action not registered: actionType=%s", r.currentNodeID)
-	}
-
-	ctx = withNodeID(ctx, r.currentNodeID)
-	ctx = withWorkflowPool(ctx, r.Pool)
-	ctx = withWorkflowRun(ctx, r)
-
-	var execErr error
-	if err := act.Execute(ctx); err != nil {
-		r.currentNodeStatus = NodeStatusFailed
-		execErr = err
-	} else if r.currentNodeStatus != NodeStatusPause && r.currentNodeStatus != NodeStatusSkipped {
-		r.currentNodeStatus = NodeStatusCompleted
-	}
-
-	bytes, err := r.Pool.Dump()
-	if err != nil {
-		return err
-	}
-
-	if err := r.store.UpdateWorkflowRunStatus(ctx, r.ID, r.currentNodeID, r.currentNodeStatus, execErr, bytes); err != nil {
-		return err
-	}
-
-	if r.currentNodeStatus != NodeStatusCompleted {
-		return nil
-	}
-
-	nextNodeIDs := r.nodeConfigs[r.currentNodeID].NextNodeIDs
-	for _, nextNodeID := range nextNodeIDs {
-		r.currentNodeID = nextNodeID
-		if err := r.executeOne(ctx); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 type subscriberMap struct {
@@ -329,9 +448,12 @@ func (m *subscriberMap) unset(ctx context.Context, workflowRunID string, nodeID 
 	return m.store.UpdateInterestList(ctx, workflowRunID, m.data)
 }
 
-func (m *subscriberMap) foreach(
+func (m *subscriberMap) notify(
 	ctx context.Context,
-	fn func(ctx context.Context, workflowRunID, nodeID string, interestEventIDs map[string]struct{}) error,
+	targetWorkflowID,
+	targetNodeID,
+	targetEventID string,
+	fn func(ctx context.Context) error,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -341,7 +463,15 @@ func (m *subscriberMap) foreach(
 		if err != nil {
 			return err
 		}
-		if err := fn(ctx, workflowRunID, nodeID, eventIDs); err != nil {
+		if (workflowRunID != targetWorkflowID) || (nodeID != targetNodeID) {
+			continue
+		}
+
+		if _, ok := eventIDs[targetEventID]; !ok {
+			continue
+		}
+
+		if err := fn(ctx); err != nil {
 			return err
 		}
 	}

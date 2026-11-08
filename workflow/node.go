@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -51,37 +50,22 @@ func Skip(ctx context.Context) error {
 }
 
 func WaitFor(ctx context.Context, eventID string) error {
-	workflowRun, err := extractWorkflowRun(ctx)
-	if err != nil {
-		return err
-	}
-	nodeID, err := extractNodeID(ctx)
-	if err != nil {
-		return err
-	}
 	status, err := extractNodeStatus(ctx)
 	if err != nil {
 		return err
 	}
-
 	*status = NodeStatusPause
 
-	return workflowRun.subscriberMap.set(ctx, workflowRun.ID, nodeID, eventID)
+	ctxEventID, err := extractEventID(ctx)
+	if err != nil {
+		return err
+	}
+	*ctxEventID = eventID
+
+	return nil
 }
 
 func Resume(ctx context.Context) error {
-	workflowRun, err := extractWorkflowRun(ctx)
-	if err != nil {
-		return err
-	}
-	nodeID, err := extractNodeID(ctx)
-	if err != nil {
-		return err
-	}
-	eventID, err := extractEventID(ctx)
-	if err != nil {
-		return err
-	}
 	nodeStatus, err := extractNodeStatus(ctx)
 	if err != nil {
 		return err
@@ -90,24 +74,7 @@ func Resume(ctx context.Context) error {
 	if *nodeStatus != NodeStatusPause {
 		return errors.New("cannot resume unsuspend node")
 	}
-	workflowRun.subscriberMap.unset(ctx, workflowRun.ID, nodeID, eventID)
 	*nodeStatus = NodeStatusCompleted
-
-	if err := workflowRun.store.ResumeWrokflowRun(ctx, workflowRun.ID, nodeID); err != nil {
-		return fmt.Errorf("failed to resume: %w", err)
-	}
-
-	// TODO: scheduler.
-	nodeConfig, ok := workflowRun.nodeConfigs[nodeID]
-	if !ok {
-		return fmt.Errorf("failed to get node config for %q", nodeID)
-	}
-	for _, nextNodeID := range nodeConfig.NextNodeIDs {
-		workflowRun.readyCh <- &ReadyNodeContext{
-			WorkflowRun: workflowRun,
-			NodeID:      nextNodeID,
-		}
-	}
 
 	return nil
 }

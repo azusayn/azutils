@@ -9,6 +9,7 @@ import (
 type contextKey string
 
 const (
+	contextKeyWorkflow       contextKey = "workflow"
 	contextKeyWorkflowRun    contextKey = "workflow_run"
 	contextKeyEventID        contextKey = "event_id"
 	contextKeyWorkflowPool   contextKey = "pool"
@@ -16,26 +17,14 @@ const (
 	contextKeyNodeStatus     contextKey = "node_status"
 )
 
-func withWorkflowRun(ctx context.Context, workflowRun *WorkflowRun) context.Context {
-	return context.WithValue(ctx, contextKeyWorkflowRun, workflowRun)
-}
-
-func extractWorkflowRun(ctx context.Context) (*WorkflowRun, error) {
-	workflowRun, ok := ctx.Value(contextKeyWorkflowRun).(*WorkflowRun)
-	if !ok {
-		return nil, errors.New("failed to extract workflow run from context")
-	}
-	return workflowRun, nil
-}
-
-func withEventID(ctx context.Context, eventID string) context.Context {
+func withEventID(ctx context.Context, eventID *string) context.Context {
 	return context.WithValue(ctx, contextKeyEventID, eventID)
 }
 
-func extractEventID(ctx context.Context) (string, error) {
-	eventID, ok := ctx.Value(contextKeyEventID).(string)
-	if !ok {
-		return "", errors.New("failed to extract event ID from context")
+func extractEventID(ctx context.Context) (*string, error) {
+	eventID, ok := ctx.Value(contextKeyEventID).(*string)
+	if !ok || eventID == nil {
+		return nil, errors.New("failed to extract event ID from context")
 	}
 
 	return eventID, nil

@@ -110,7 +110,7 @@ func Get[T any](ctx context.Context, key string) (T, error) {
 
 func Bind(ctx context.Context, input any) error {
 	val := reflect.ValueOf(input)
-	if val.Kind() != reflect.Ptr || val.Elem().Kind() != reflect.Struct {
+	if val.Kind() != reflect.Pointer || val.Elem().Kind() != reflect.Struct {
 		return errors.New("input must be a pointer to a struct")
 	}
 

@@ -175,7 +175,6 @@ func (w *Workflow) StartNodeExecutors(ctx context.Context) error {
 	return merr
 }
 
-// StartEventPoller 启动后台协程对工作流上的事件通道进行监听，并分发事件给注册的事件处理器。
 func (w *Workflow) StartEventPoller(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -222,11 +221,15 @@ func (w *Workflow) Run(ctx context.Context, initPoolFunc func(pool *VariablePool
 			Status: NodeStatusPending,
 		}
 	}
-	workflowRunModel, err := w.store.CreateWorkflowRun(ctx, &WorkflowRunModel{
-		Data:           data,
-		NodeExecutions: nodeExecutions,
-	})
-	if err != nil {
+	var workflowRunModel *WorkflowRunModel
+	if err := w.store.Transaction(ctx, func(ctx context.Context) error {
+		var err error
+		workflowRunModel, err = w.store.CreateWorkflowRun(ctx, &WorkflowRunModel{
+			Data:           data,
+			NodeExecutions: nodeExecutions,
+		})
+		return err
+	}); err != nil {
 		return nil, err
 	}
 
@@ -301,7 +304,9 @@ func (w *Workflow) handleWorkflowEvent(ctx context.Context, event *WorkflowEvent
 		return err
 	}
 
-	if err := w.store.ResumeWrokflowRun(ctx, workflowRun.ID, event.NodeID); err != nil {
+	if err := w.store.Transaction(ctx, func(ctx context.Context) error {
+		return w.store.ResumeWrokflowRun(ctx, workflowRun.ID, event.NodeID)
+	}); err != nil {
 		return fmt.Errorf("failed to resume: %w", err)
 	}
 
@@ -375,7 +380,9 @@ func (w *Workflow) execute(ctx context.Context, workflowRun *WorkflowRun, nodeID
 		Status: nodeStatus,
 		Err:    execErr,
 	}
-	if err := w.store.UpdateWorkflowRunStatus(ctx, workflowRun.ID, nodeID, nodeExecution, execErr, bytes); err != nil {
+	if err := w.store.Transaction(ctx, func(ctx context.Context) error {
+		return w.store.UpdateWorkflowRunStatus(ctx, workflowRun.ID, nodeID, nodeExecution, execErr, bytes)
+	}); err != nil {
 		return nodeStatus, err
 	}
 
@@ -412,7 +419,9 @@ func (m *subscriberMap) set(ctx context.Context, workflowRunID string, nodeID st
 	}
 	m.data[subscriberID][eventID] = struct{}{}
 
-	return m.store.UpdateInterestList(ctx, workflowRunID, m.data)
+	return m.store.Transaction(ctx, func(ctx context.Context) error {
+		return m.store.UpdateInterestList(ctx, workflowRunID, m.data)
+	})
 }
 
 func (m *subscriberMap) unset(ctx context.Context, workflowRunID string, nodeID string, eventID string) error {
@@ -422,7 +431,9 @@ func (m *subscriberMap) unset(ctx context.Context, workflowRunID string, nodeID 
 	}
 	delete(m.data[subscriberID], eventID)
 
-	return m.store.UpdateInterestList(ctx, workflowRunID, m.data)
+	return m.store.Transaction(ctx, func(ctx context.Context) error {
+		return m.store.UpdateInterestList(ctx, workflowRunID, m.data)
+	})
 }
 
 func (m *subscriberMap) match(
@@ -497,7 +508,6 @@ func getReadyNodeIDs(configs map[string]NodeConfig, executions map[string]NodeEx
 	return readyNodeIDs, nil
 }
 
-// buildSubscriberID 构建感兴趣事件在每个工作流下的唯一标识。
 func buildSubscriberID(workflowRunID string, nodeID string) string {
 	return fmt.Sprintf("%s:%s", workflowRunID, nodeID)
 }

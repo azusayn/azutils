@@ -9,8 +9,6 @@ import (
 type contextKey string
 
 const (
-	contextKeyWorkflow       contextKey = "workflow"
-	contextKeyWorkflowRun    contextKey = "workflow_run"
 	contextKeyEventID        contextKey = "event_id"
 	contextKeyWorkflowPool   contextKey = "pool"
 	contextKeyWorkflowNodeID contextKey = "node_id"

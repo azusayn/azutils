@@ -8,6 +8,12 @@ import (
 	"github.com/azusayn/azutils/db"
 )
 
+type WorkflowModel struct {
+	ID            string
+	Name          string
+	subscriberMap map[string]map[string]struct{}
+}
+
 type WorkflowRunModel struct {
 	ID   string
 	Data json.RawMessage
@@ -23,12 +29,21 @@ type NodeExecution struct {
 	Status NodeStatus
 }
 
+type UpdateWorkflowRunInput struct {
+	WorkflowRunID string
+	NodeID        *string
+	Execution     *NodeExecution
+	Data          *json.RawMessage
+}
+
 type WorkflowStore interface {
 	db.Transaction
-	UpdateInterestList(ctx context.Context, workflowRunID string, subscriberMap map[string]map[string]struct{}) error
+	// GetOrCreateWorkflow creates a new workflow or returns the existing one if it already exists.
+	GetOrCreateWorkflow(ctx context.Context, name string) (*WorkflowModel, error)
+	UpdateWorkflow(ctx context.Context, workflowRunID string, subscriberMap map[string]map[string]struct{}) error
+
 	GetWorkflowRun(ctx context.Context, workflowRunID string) (*WorkflowRunModel, error)
 	ListPendingWorkflowRuns(ctx context.Context, totalNodes int) ([]*WorkflowRunModel, error)
 	CreateWorkflowRun(ctx context.Context, workflowRun *WorkflowRunModel) (*WorkflowRunModel, error)
-	UpdateWorkflowRunStatus(ctx context.Context, workflowRunID string, nodeID string, execution NodeExecution, err error, data json.RawMessage) error
-	ResumeWrokflowRun(ctx context.Context, workflowRunID, nodeID string) error
+	UpdateWorkflowRun(ctx context.Context, input UpdateWorkflowRunInput) error
 }

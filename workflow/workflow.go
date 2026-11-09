@@ -33,6 +33,9 @@ type NodeConfig struct {
 }
 
 type Workflow struct {
+	ID   string
+	Name string
+
 	logger *slog.Logger
 	// nodeConfigs maps node ID to its node config.
 	nodeConfigs     map[string]NodeConfig
@@ -58,7 +61,7 @@ type WorkflowRun struct {
 	Pool *VariablePool
 }
 
-type WorkflowOption func(*Workflow) error
+type WorkflowOption func(*Workflow)
 
 type subscriberMap struct {
 	// data maps subscriberID (workflowRunID + nodeID) to eventIDs.
@@ -67,20 +70,18 @@ type subscriberMap struct {
 }
 
 func WithLogger(logger *slog.Logger) WorkflowOption {
-	return func(w *Workflow) error {
+	return func(w *Workflow) {
 		w.logger = logger
-		return nil
 	}
 }
 
 func WithNodeExecutorNum(executorNum int) WorkflowOption {
-	return func(w *Workflow) error {
+	return func(w *Workflow) {
 		w.nodeExecutorNum = executorNum
-		return nil
 	}
 }
 
-func NewWorkflow(configs map[string]NodeConfig, store WorkflowStore, opts ...WorkflowOption) *Workflow {
+func NewWorkflow(name string, configs map[string]NodeConfig, store WorkflowStore, opts ...WorkflowOption) *Workflow {
 	w := &Workflow{
 		store:             store,
 		callbackByEventID: make(map[string]func(context.Context, any) error),
@@ -97,6 +98,19 @@ func NewWorkflow(configs map[string]NodeConfig, store WorkflowStore, opts ...Wor
 	}
 
 	return w
+}
+
+func (w *Workflow) Init(ctx context.Context) error {
+	workflowModel, err := w.store.GetOrCreateWorkflow(ctx, w.Name)
+	if err != nil {
+		return err
+	}
+
+	w.subscriberMap.load(workflowModel.subscriberMap)
+	w.Name = workflowModel.Name
+	w.ID = workflowModel.ID
+
+	return nil
 }
 
 func (w *Workflow) RecoverWorkflowRuns(ctx context.Context) error {
@@ -296,8 +310,21 @@ func (w *Workflow) handleWorkflowEvent(ctx context.Context, event *WorkflowEvent
 	}
 
 	ctx = withNodeStatus(ctx, &execution.Status)
+	var execErr error
 	if err := callback(ctx, event.Payload); err != nil {
-		return err
+		execErr = err
+		execution.Status = NodeStatusFailed
+	}
+
+	switch execution.Status {
+	case NodeStatusPause:
+		return nil
+	case NodeStatusCompleted,
+		NodeStatusFailed,
+		NodeStatusSkipped:
+
+	default:
+		return fmt.Errorf("invalid node status %q after resuming", execution.Status)
 	}
 
 	if err := w.subscriberMap.unset(ctx, workflowRun.ID, event.NodeID, event.ID); err != nil {
@@ -305,9 +332,20 @@ func (w *Workflow) handleWorkflowEvent(ctx context.Context, event *WorkflowEvent
 	}
 
 	if err := w.store.Transaction(ctx, func(ctx context.Context) error {
-		return w.store.ResumeWrokflowRun(ctx, workflowRun.ID, event.NodeID)
+		return w.store.UpdateWorkflowRun(ctx, UpdateWorkflowRunInput{
+			WorkflowRunID: workflowRun.ID,
+			NodeID:        &event.NodeID,
+			Execution: &NodeExecution{
+				Status: execution.Status,
+				Err:    execErr,
+			},
+		})
 	}); err != nil {
 		return fmt.Errorf("failed to resume: %w", err)
+	}
+
+	if execution.Status == NodeStatusSkipped {
+		return nil
 	}
 
 	return w.schedule(event.NodeID, workflowRun)
@@ -381,7 +419,12 @@ func (w *Workflow) execute(ctx context.Context, workflowRun *WorkflowRun, nodeID
 		Err:    execErr,
 	}
 	if err := w.store.Transaction(ctx, func(ctx context.Context) error {
-		return w.store.UpdateWorkflowRunStatus(ctx, workflowRun.ID, nodeID, nodeExecution, execErr, bytes)
+		return w.store.UpdateWorkflowRun(ctx, UpdateWorkflowRunInput{
+			WorkflowRunID: workflowRun.ID,
+			NodeID:        &nodeID,
+			Execution:     &nodeExecution,
+			Data:          &bytes,
+		})
 	}); err != nil {
 		return nodeStatus, err
 	}
@@ -407,6 +450,10 @@ func newSubscriberMap(store WorkflowStore) *subscriberMap {
 	}
 }
 
+func (m *subscriberMap) load(data map[string]map[string]struct{}) {
+	m.data = data
+}
+
 func (m *subscriberMap) set(ctx context.Context, workflowRunID string, nodeID string, eventID string) error {
 	subscriberID := buildSubscriberID(workflowRunID, nodeID)
 
@@ -420,7 +467,7 @@ func (m *subscriberMap) set(ctx context.Context, workflowRunID string, nodeID st
 	m.data[subscriberID][eventID] = struct{}{}
 
 	return m.store.Transaction(ctx, func(ctx context.Context) error {
-		return m.store.UpdateInterestList(ctx, workflowRunID, m.data)
+		return m.store.UpdateWorkflow(ctx, workflowRunID, m.data)
 	})
 }
 
@@ -432,7 +479,7 @@ func (m *subscriberMap) unset(ctx context.Context, workflowRunID string, nodeID 
 	delete(m.data[subscriberID], eventID)
 
 	return m.store.Transaction(ctx, func(ctx context.Context) error {
-		return m.store.UpdateInterestList(ctx, workflowRunID, m.data)
+		return m.store.UpdateWorkflow(ctx, workflowRunID, m.data)
 	})
 }
 

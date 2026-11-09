@@ -6,6 +6,10 @@ import (
 	"sync"
 )
 
+func init() {
+	Register(RootNodeID, rootNode{})
+}
+
 const RootNodeID = "root"
 
 type NodeStatus string
@@ -25,6 +29,12 @@ var (
 
 type Node interface {
 	Execute(ctx context.Context) error
+}
+
+type rootNode struct{}
+
+func (rootNode) Execute(context.Context) error {
+	return nil
 }
 
 func Register(nodeType string, node Node) {

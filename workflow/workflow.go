@@ -43,7 +43,7 @@ type Workflow struct {
 
 	store             WorkflowStore
 	readyCh           chan *ReadyNodeContext
-	eventCh           <-chan *WorkflowEvent
+	EventCh           chan *WorkflowEvent
 	subscriberMap     *subscriberMap
 	callbackByEventID map[string]func(context.Context, any) error
 
@@ -90,7 +90,7 @@ func NewWorkflow(name string, configs map[string]NodeConfig, store WorkflowStore
 		nodeExecutorNum:   defaultNodeExecutorNum,
 		subscriberMap:     newSubscriberMap(store),
 		readyCh:           make(chan *ReadyNodeContext, readyChannelCapacity),
-		eventCh:           make(chan *WorkflowEvent, workflowEventChannelCapacity),
+		EventCh:           make(chan *WorkflowEvent, workflowEventChannelCapacity),
 	}
 
 	for _, opt := range opts {
@@ -198,7 +198,7 @@ func (w *Workflow) StartEventPoller(ctx context.Context) error {
 			case <-ctx.Done():
 				return ctx.Err()
 
-			case event := <-w.eventCh:
+			case event := <-w.EventCh:
 				if err := w.handleWorkflowEvent(ctx, event); err != nil {
 					slog.ErrorContext(ctx, "failed to process workflow event", slog.Any("err", err))
 				}
@@ -280,7 +280,7 @@ func (w *Workflow) handleWorkflowEvent(ctx context.Context, event *WorkflowEvent
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	match, err := w.subscriberMap.match(event.ID, event.WorkflowRunID, event.NodeID)
+	match, err := w.subscriberMap.match(event.WorkflowRunID, event.NodeID, event.ID)
 	if err != nil {
 		return err
 	}
@@ -310,6 +310,8 @@ func (w *Workflow) handleWorkflowEvent(ctx context.Context, event *WorkflowEvent
 	}
 
 	ctx = withNodeStatus(ctx, &execution.Status)
+	ctx = withNodeID(ctx, event.NodeID)
+	ctx = withWorkflowPool(ctx, workflowRun.Pool)
 	var execErr error
 	if err := callback(ctx, event.Payload); err != nil {
 		execErr = err
@@ -383,7 +385,7 @@ func (w *Workflow) execute(ctx context.Context, workflowRun *WorkflowRun, nodeID
 	}
 
 	nodeStatus := NodeStatusPending
-	var eventID *string
+	eventID := new(string)
 	ctx = withNodeID(ctx, nodeID)
 	ctx = withWorkflowPool(ctx, workflowRun.Pool)
 	ctx = withNodeStatus(ctx, &nodeStatus)

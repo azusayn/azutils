@@ -81,6 +81,7 @@ func WithNodeExecutorNum(executorNum int) WorkflowOption {
 	}
 }
 
+// TODO: support workflow with fan-in nodes.
 func NewWorkflow(name string, configs map[string]NodeConfig, store WorkflowStore, opts ...WorkflowOption) *Workflow {
 	w := &Workflow{
 		store:             store,

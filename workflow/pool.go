@@ -17,7 +17,7 @@ const (
 
 type VariablePool struct {
 	values      sync.Map
-	nodeConfigs map[string]NodeConfig
+	nodeConfigs map[string]*NodeConfig
 }
 
 type VariableKey struct {
@@ -25,7 +25,7 @@ type VariableKey struct {
 	Key    string
 }
 
-func NewVariablePool(nodeConfigs map[string]NodeConfig) *VariablePool {
+func NewVariablePool(nodeConfigs map[string]*NodeConfig) *VariablePool {
 	return &VariablePool{nodeConfigs: nodeConfigs}
 }
 

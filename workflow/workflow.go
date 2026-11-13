@@ -29,6 +29,7 @@ type NodeInputConfig map[string]string
 
 type NodeConfig struct {
 	Inputs      NodeInputConfig
+	InDegree    int
 	NextNodeIDs []string
 }
 
@@ -38,12 +39,12 @@ type Workflow struct {
 
 	logger *slog.Logger
 	// nodeConfigs maps node ID to its node config.
-	nodeConfigs     map[string]NodeConfig
+	nodeConfigs     map[string]*NodeConfig
 	nodeExecutorNum int
 
 	store             WorkflowStore
-	readyCh           chan *ReadyNodeContext
-	EventCh           chan *WorkflowEvent
+	readyCh           chan *readyNodeContext
+	eventCh           chan *WorkflowEvent
 	subscriberMap     *subscriberMap
 	callbackByEventID map[string]func(context.Context, any) error
 
@@ -51,7 +52,7 @@ type Workflow struct {
 	mu sync.Mutex
 }
 
-type ReadyNodeContext struct {
+type readyNodeContext struct {
 	NodeID      string
 	WorkflowRun *WorkflowRun
 }
@@ -81,25 +82,41 @@ func WithNodeExecutorNum(executorNum int) WorkflowOption {
 	}
 }
 
-// TODO: support workflow with fan-in nodes.
-func NewWorkflow(name string, configs map[string]NodeConfig, store WorkflowStore, opts ...WorkflowOption) *Workflow {
+func NewWorkflow(name string, configs map[string]*NodeConfig, store WorkflowStore, opts ...WorkflowOption) (*Workflow, error) {
+	if err := setupInDegree(configs); err != nil {
+		return nil, err
+	}
+
 	w := &Workflow{
 		Name:              name,
+		nodeConfigs:       configs,
 		store:             store,
 		callbackByEventID: make(map[string]func(context.Context, any) error),
 		logger:            slog.Default(),
-		nodeConfigs:       configs,
 		nodeExecutorNum:   defaultNodeExecutorNum,
 		subscriberMap:     newSubscriberMap(store),
-		readyCh:           make(chan *ReadyNodeContext, readyChannelCapacity),
-		EventCh:           make(chan *WorkflowEvent, workflowEventChannelCapacity),
+		readyCh:           make(chan *readyNodeContext, readyChannelCapacity),
+		eventCh:           make(chan *WorkflowEvent, workflowEventChannelCapacity),
 	}
 
 	for _, opt := range opts {
 		opt(w)
 	}
 
-	return w
+	return w, nil
+}
+
+func setupInDegree(nodeConfigs map[string]*NodeConfig) error {
+	for nodeID, nodeConfig := range nodeConfigs {
+		for _, nextNodeID := range nodeConfig.NextNodeIDs {
+			nextNodeConfig, ok := nodeConfigs[nextNodeID]
+			if !ok {
+				return fmt.Errorf("node ID does not exist %q", nodeID)
+			}
+			nextNodeConfig.InDegree++
+		}
+	}
+	return nil
 }
 
 func (w *Workflow) Init(ctx context.Context) error {
@@ -132,7 +149,7 @@ func (w *Workflow) RecoverWorkflowRuns(ctx context.Context) error {
 			return err
 		}
 		for _, nodeID := range readyNodeIDs {
-			w.readyCh <- &ReadyNodeContext{
+			w.readyCh <- &readyNodeContext{
 				NodeID:      nodeID,
 				WorkflowRun: workflowRun,
 			}
@@ -149,12 +166,7 @@ func (w *Workflow) StartNodeExecutors(ctx context.Context) error {
 			case nodeContext := <-w.readyCh:
 				nodeStatus, err := w.execute(ctx, nodeContext.WorkflowRun, nodeContext.NodeID)
 				if err != nil {
-					w.logger.ErrorContext(
-						ctx,
-						"failed to execute node",
-						slog.Any("node_id", nodeContext.NodeID),
-						slog.Any("err", err),
-					)
+					w.logger.ErrorContext(ctx, "failed to execute node", slog.Any("node_id", nodeContext.NodeID), slog.Any("err", err))
 					continue
 				}
 
@@ -162,9 +174,11 @@ func (w *Workflow) StartNodeExecutors(ctx context.Context) error {
 					continue
 				}
 
-				if err := w.schedule(nodeContext.NodeID, nodeContext.WorkflowRun); err != nil {
+				w.mu.Lock()
+				if err := w.schedule(ctx, nodeContext.NodeID, nodeContext.WorkflowRun); err != nil {
 					w.logger.ErrorContext(ctx, "failed to schedule node", slog.Any("err", err))
 				}
+				w.mu.Unlock()
 
 			case <-ctx.Done():
 				return ctx.Err()
@@ -191,7 +205,7 @@ func (w *Workflow) StartNodeExecutors(ctx context.Context) error {
 	return merr
 }
 
-func (w *Workflow) StartEventPoller(ctx context.Context) error {
+func (w *Workflow) StartEventProcessor(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -200,7 +214,7 @@ func (w *Workflow) StartEventPoller(ctx context.Context) error {
 			case <-ctx.Done():
 				return ctx.Err()
 
-			case event := <-w.EventCh:
+			case event := <-w.eventCh:
 				if err := w.handleWorkflowEvent(ctx, event); err != nil {
 					slog.ErrorContext(ctx, "failed to process workflow event", slog.Any("err", err))
 				}
@@ -219,6 +233,15 @@ func (w *Workflow) RegisterCallback(eventID string, callback func(context.Contex
 	w.callbackByEventID[eventID] = callback
 
 	return nil
+}
+
+func (w *Workflow) Post(ctx context.Context, event *WorkflowEvent) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case w.eventCh <- event:
+		return nil
+	}
 }
 
 // TODO: 提供变量池初始化参数而不是让调用者直接操纵 pool.
@@ -255,7 +278,7 @@ func (w *Workflow) Run(ctx context.Context, initPoolFunc func(pool *VariablePool
 		return nil, err
 	}
 
-	w.readyCh <- &ReadyNodeContext{
+	w.readyCh <- &readyNodeContext{
 		NodeID:      RootNodeID,
 		WorkflowRun: workflowRun,
 	}
@@ -353,22 +376,59 @@ func (w *Workflow) handleWorkflowEvent(ctx context.Context, event *WorkflowEvent
 		return nil
 	}
 
-	return w.schedule(event.NodeID, workflowRun)
+	return w.schedule(ctx, event.NodeID, workflowRun)
 }
 
 // TODO: scheduler.
-func (w *Workflow) schedule(nodeID string, workflowRun *WorkflowRun) error {
+func (w *Workflow) schedule(ctx context.Context, nodeID string, workflowRun *WorkflowRun) error {
 	nodeConfig, ok := w.nodeConfigs[nodeID]
 	if !ok {
 		return fmt.Errorf("failed to get node config for %q", nodeID)
 	}
 	for _, nextNodeID := range nodeConfig.NextNodeIDs {
-		w.readyCh <- &ReadyNodeContext{
+		ready, err := w.updateAndCheckReadyInDegree(ctx, workflowRun.ID, nextNodeID)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			continue
+		}
+		w.readyCh <- &readyNodeContext{
 			WorkflowRun: workflowRun,
 			NodeID:      nextNodeID,
 		}
 	}
 	return nil
+}
+
+// updateAndCheckReadyInDegree return true if the node is ready to be executed.
+func (w *Workflow) updateAndCheckReadyInDegree(ctx context.Context, workflowRunID, nodeID string) (bool, error) {
+	run, err := w.store.GetWorkflowRun(ctx, workflowRunID)
+	if err != nil {
+		return false, err
+	}
+	exec, ok := run.NodeExecutions[nodeID]
+	if !ok {
+		return false, fmt.Errorf("failed to get execution for %q", nodeID)
+	}
+	exec.ReadyInDegree++
+	if err := w.store.UpdateWorkflowRun(ctx, UpdateWorkflowRunInput{
+		WorkflowRunID: workflowRunID,
+		NodeID:        &nodeID,
+		Execution:     &exec,
+	}); err != nil {
+		return false, err
+	}
+
+	nodeConfig, ok := w.nodeConfigs[nodeID]
+	if !ok {
+		return false, fmt.Errorf("failed to get node config for %q", nodeID)
+	}
+	if exec.ReadyInDegree < nodeConfig.InDegree {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func (w *Workflow) getRegisteredCallback(eventID string) (func(context.Context, any) error, error) {
@@ -405,6 +465,7 @@ func (w *Workflow) execute(ctx context.Context, workflowRun *WorkflowRun, nodeID
 		if err := w.handleNodeStatusPause(ctx, workflowRun, nodeID, eventID); err != nil {
 			return nodeStatus, err
 		}
+
 	case NodeStatusPending:
 		nodeStatus = NodeStatusCompleted
 
@@ -512,7 +573,7 @@ func (m *subscriberMap) match(
 	return false, nil
 }
 
-func getReadyNodeIDs(configs map[string]NodeConfig, executions map[string]NodeExecution) ([]string, error) {
+func getReadyNodeIDs(configs map[string]*NodeConfig, executions map[string]NodeExecution) ([]string, error) {
 	readyNodeIDs := make([]string, 0)
 
 	var dfs func(string) error

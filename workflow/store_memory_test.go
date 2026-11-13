@@ -47,7 +47,7 @@ func TestMemoryStoreWorkflowForkResume(t *testing.T) {
 	Register(testCheckNodeID, checkApprovalNode{})
 
 	store := NewMemoryStore()
-	configs := map[string]NodeConfig{
+	configs := map[string]*NodeConfig{
 		RootNodeID: {
 			NextNodeIDs: []string{testWaitNodeID},
 		},
@@ -62,7 +62,10 @@ func TestMemoryStoreWorkflowForkResume(t *testing.T) {
 		},
 	}
 
-	w := NewWorkflow("memory-store-test", configs, store, WithNodeExecutorNum(2))
+	w, err := NewWorkflow("memory-store-test", configs, store, WithNodeExecutorNum(2))
+	if err != nil {
+		t.Fatalf("NewWorkflow: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -77,7 +80,7 @@ func TestMemoryStoreWorkflowForkResume(t *testing.T) {
 		}
 	}()
 	go func() {
-		if err := w.StartEventPoller(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := w.StartEventProcessor(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			t.Logf("StartEventPoller: %v", err)
 		}
 	}()
@@ -98,7 +101,7 @@ func TestMemoryStoreWorkflowForkResume(t *testing.T) {
 
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		w.EventCh <- &WorkflowEvent{
+		w.eventCh <- &WorkflowEvent{
 			ID:            testApprovalEvt,
 			WorkflowRunID: run.ID,
 			NodeID:        testWaitNodeID,

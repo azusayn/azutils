@@ -26,8 +26,9 @@ type WorkflowRunModel struct {
 }
 
 type NodeExecution struct {
-	Err    error
-	Status NodeStatus
+	ReadyInDegree int
+	Err           error
+	Status        NodeStatus
 }
 
 type UpdateWorkflowRunInput struct {

@@ -116,7 +116,7 @@ func (w *Workflow) Init(ctx context.Context) error {
 }
 
 func (w *Workflow) RecoverWorkflowRuns(ctx context.Context) error {
-	workflowRunModels, err := w.store.ListPendingWorkflowRuns(ctx, len(w.nodeConfigs))
+	workflowRunModels, err := w.store.ListPendingWorkflowRuns(ctx, w.ID, len(w.nodeConfigs))
 	if err != nil {
 		return err
 	}
@@ -241,6 +241,7 @@ func (w *Workflow) Run(ctx context.Context, initPoolFunc func(pool *VariablePool
 	if err := w.store.Transaction(ctx, func(ctx context.Context) error {
 		var err error
 		workflowRunModel, err = w.store.CreateWorkflowRun(ctx, &WorkflowRunModel{
+			WorkflowID:     w.ID,
 			Data:           data,
 			NodeExecutions: nodeExecutions,
 		})

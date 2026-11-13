@@ -156,7 +156,7 @@ func isTerminalStatus(status NodeStatus) bool {
 
 func TestMemoryStoreListPendingUnimplemented(t *testing.T) {
 	store := NewMemoryStore()
-	_, err := store.ListPendingWorkflowRuns(context.Background(), 1)
+	_, err := store.ListPendingWorkflowRuns(context.Background(), "", 1)
 	if err == nil || err.Error() != "unimplemented" {
 		t.Fatalf("ListPendingWorkflowRuns error = %v, want unimplemented", err)
 	}

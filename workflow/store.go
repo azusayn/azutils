@@ -15,8 +15,9 @@ type WorkflowModel struct {
 }
 
 type WorkflowRunModel struct {
-	ID   string
-	Data json.RawMessage
+	ID         string
+	WorkflowID string
+	Data       json.RawMessage
 	// NodeExecutions maps node ID to node status.
 	NodeExecutions map[string]NodeExecution
 	CompletedNodes int
@@ -43,7 +44,7 @@ type WorkflowStore interface {
 	UpdateWorkflow(ctx context.Context, workflowRunID string, subscriberMap map[string]map[string]struct{}) error
 
 	GetWorkflowRun(ctx context.Context, workflowRunID string) (*WorkflowRunModel, error)
-	ListPendingWorkflowRuns(ctx context.Context, totalNodes int) ([]*WorkflowRunModel, error)
+	ListPendingWorkflowRuns(ctx context.Context, workflowID string, totalNodes int) ([]*WorkflowRunModel, error)
 	CreateWorkflowRun(ctx context.Context, workflowRun *WorkflowRunModel) (*WorkflowRunModel, error)
 	UpdateWorkflowRun(ctx context.Context, input UpdateWorkflowRunInput) error
 }

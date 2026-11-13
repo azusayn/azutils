@@ -76,7 +76,7 @@ func (s *MemoryStore) GetWorkflowRun(_ context.Context, workflowRunID string) (*
 	return cloneWorkflowRun(run), nil
 }
 
-func (s *MemoryStore) ListPendingWorkflowRuns(context.Context, int) ([]*WorkflowRunModel, error) {
+func (s *MemoryStore) ListPendingWorkflowRuns(context.Context, string, int) ([]*WorkflowRunModel, error) {
 	return nil, errors.New("unimplemented")
 }
 
@@ -91,6 +91,7 @@ func (s *MemoryStore) CreateWorkflowRun(_ context.Context, workflowRun *Workflow
 	now := time.Now()
 	run := &WorkflowRunModel{
 		ID:             workflowRun.ID,
+		WorkflowID:     workflowRun.WorkflowID,
 		Data:           append(json.RawMessage(nil), workflowRun.Data...),
 		NodeExecutions: cloneNodeExecutions(workflowRun.NodeExecutions),
 		CompletedNodes: workflowRun.CompletedNodes,
@@ -158,6 +159,7 @@ func cloneWorkflowRun(src *WorkflowRunModel) *WorkflowRunModel {
 	}
 	return &WorkflowRunModel{
 		ID:             src.ID,
+		WorkflowID:     src.WorkflowID,
 		Data:           append(json.RawMessage(nil), src.Data...),
 		NodeExecutions: cloneNodeExecutions(src.NodeExecutions),
 		CompletedNodes: src.CompletedNodes,

@@ -50,18 +50,19 @@ func (s *MemoryStore) GetOrCreateWorkflow(_ context.Context, name string) (*Work
 	return cloneWorkflowModel(model), nil
 }
 
-func (s *MemoryStore) UpdateWorkflow(_ context.Context, _ string, subscriberMap map[string]map[string]struct{}) error {
+func (s *MemoryStore) UpdateWorkflow(_ context.Context, workflowRunID string, subscriberMap map[string]map[string]struct{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.workflows) == 0 {
-		return errors.New("workflow not found")
+	run, ok := s.runs[workflowRunID]
+	if !ok {
+		return fmt.Errorf("workflow run %q not found", workflowRunID)
 	}
-
-	cloned := cloneSubscriberMap(subscriberMap)
-	for _, model := range s.workflows {
-		model.subscriberMap = cloneSubscriberMap(cloned)
+	model, ok := s.byID[run.WorkflowID]
+	if !ok {
+		return fmt.Errorf("workflow %q not found", run.WorkflowID)
 	}
+	model.subscriberMap = cloneSubscriberMap(subscriberMap)
 	return nil
 }
 

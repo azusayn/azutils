@@ -618,6 +618,7 @@ func getReadyNodeIDs(configs map[string]*NodeConfig, executions map[string]NodeE
 
 		case NodeStatusPending:
 			readyNodeIDs = append(readyNodeIDs, nodeID)
+			return nil
 
 		default:
 		}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -15,7 +16,9 @@ import (
 const (
 	readyChannelCapacity         = 2000
 	workflowEventChannelCapacity = 1000
-	defaultNodeExecutorNum       = 1
+	defaultNodeExecutorNum       = 4
+	// TODO: support per-node timeout policy.
+	defaultNodeExecutionTimeout = 3 * time.Second
 )
 
 type WorkflowEvent struct {
@@ -39,8 +42,9 @@ type Workflow struct {
 
 	logger *slog.Logger
 	// nodeConfigs maps node ID to its node config.
-	nodeConfigs     map[string]*NodeConfig
-	nodeExecutorNum int
+	nodeConfigs          map[string]*NodeConfig
+	nodeExecutorNum      int
+	nodeExecutionTimeout time.Duration
 
 	store             WorkflowStore
 	readyCh           chan *readyNodeContext
@@ -82,21 +86,28 @@ func WithNodeExecutorNum(executorNum int) WorkflowOption {
 	}
 }
 
+func WithNodeExecutionTimeout(duration time.Duration) WorkflowOption {
+	return func(w *Workflow) {
+		w.nodeExecutionTimeout = duration
+	}
+}
+
 func NewWorkflow(name string, configs map[string]*NodeConfig, store WorkflowStore, opts ...WorkflowOption) (*Workflow, error) {
 	if err := setupInDegree(configs); err != nil {
 		return nil, err
 	}
 
 	w := &Workflow{
-		Name:              name,
-		nodeConfigs:       configs,
-		store:             store,
-		callbackByEventID: make(map[string]func(context.Context, any) error),
-		logger:            slog.Default(),
-		nodeExecutorNum:   defaultNodeExecutorNum,
-		subscriberMap:     newSubscriberMap(store),
-		readyCh:           make(chan *readyNodeContext, readyChannelCapacity),
-		eventCh:           make(chan *WorkflowEvent, workflowEventChannelCapacity),
+		Name:                 name,
+		nodeConfigs:          configs,
+		nodeExecutionTimeout: defaultNodeExecutionTimeout,
+		store:                store,
+		callbackByEventID:    make(map[string]func(context.Context, any) error),
+		logger:               slog.Default(),
+		nodeExecutorNum:      defaultNodeExecutorNum,
+		subscriberMap:        newSubscriberMap(store),
+		readyCh:              make(chan *readyNodeContext, readyChannelCapacity),
+		eventCh:              make(chan *WorkflowEvent, workflowEventChannelCapacity),
 	}
 
 	for _, opt := range opts {
@@ -454,10 +465,21 @@ func (w *Workflow) execute(ctx context.Context, workflowRun *WorkflowRun, nodeID
 	ctx = withNodeStatus(ctx, &nodeStatus)
 	ctx = withEventID(ctx, eventID)
 
+	ctx, cancel := context.WithTimeout(ctx, w.nodeExecutionTimeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- act.Execute(ctx)
+	}()
 	var execErr error
-	if err := act.Execute(ctx); err != nil {
-		nodeStatus = NodeStatusFailed
-		execErr = err
+	select {
+	case err := <-done:
+		if err != nil {
+			nodeStatus = NodeStatusFailed
+			execErr = err
+		}
+	case <-ctx.Done():
+		return NodeStatusPending, ctx.Err()
 	}
 
 	switch nodeStatus {
